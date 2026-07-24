@@ -34,6 +34,7 @@ WHIPOutput::WHIPOutput(obs_data_t *, obs_output_t *output)
 	  endpoint_url(),
 	  bearer_token(),
 	  resource_url(),
+	  active_generation(0),
 	  running(false),
 	  start_stop_mutex(),
 	  start_stop_thread(),
@@ -60,6 +61,7 @@ WHIPOutput::~WHIPOutput()
 bool WHIPOutput::Start()
 {
 	std::lock_guard<std::mutex> l(start_stop_mutex);
+	const uint64_t generation = active_generation.fetch_add(1) + 1;
 
 	for (uint32_t idx = 0; idx < MAX_OUTPUT_VIDEO_ENCODERS; idx++) {
 		auto encoder = obs_output_get_video_encoder2(output, idx);
@@ -81,7 +83,7 @@ bool WHIPOutput::Start()
 
 	if (start_stop_thread.joinable())
 		start_stop_thread.join();
-	start_stop_thread = std::thread(&WHIPOutput::StartThread, this);
+	start_stop_thread = std::thread(&WHIPOutput::StartThread, this, generation);
 
 	return true;
 }
@@ -89,10 +91,16 @@ bool WHIPOutput::Start()
 void WHIPOutput::Stop(bool signal)
 {
 	std::lock_guard<std::mutex> l(start_stop_mutex);
+	const uint64_t generation = active_generation.load();
+	std::string resourceURL;
+	{
+		std::lock_guard<std::mutex> rl(resource_mutex);
+		resourceURL = resource_url;
+	}
 	if (start_stop_thread.joinable())
 		start_stop_thread.join();
 
-	start_stop_thread = std::thread(&WHIPOutput::StopThread, this, signal);
+	start_stop_thread = std::thread(&WHIPOutput::StopThread, this, signal, generation, resourceURL);
 }
 
 void WHIPOutput::Data(struct encoder_packet *packet)
@@ -271,7 +279,7 @@ bool WHIPOutput::Init()
  *
  * @return bool
  */
-bool WHIPOutput::Setup()
+bool WHIPOutput::Setup(uint64_t generation)
 {
 	rtc::Configuration cfg;
 
@@ -281,7 +289,12 @@ bool WHIPOutput::Setup()
 
 	peer_connection = std::make_shared<rtc::PeerConnection>(cfg);
 
-	peer_connection->onStateChange([this](rtc::PeerConnection::State state) {
+	peer_connection->onStateChange([this, generation](rtc::PeerConnection::State state) {
+		if (!IsActiveGeneration(generation)) {
+			do_log(LOG_DEBUG, "[WHIP generation=%llu] ignoring stale PeerConnection state change: %d",
+			       static_cast<unsigned long long>(generation), static_cast<int>(state));
+			return;
+		}
 		switch (state) {
 		case rtc::PeerConnection::State::New:
 			do_log(LOG_INFO, "PeerConnection state is now: New");
@@ -388,7 +401,7 @@ void WHIPOutput::ParseLinkHeader(std::string val, std::vector<rtc::IceServer> &i
 	}
 }
 
-bool WHIPOutput::Connect()
+bool WHIPOutput::Connect(uint64_t generation, std::string &attemptResourceURL)
 {
 	struct curl_slist *headers = NULL;
 	headers = curl_slist_append(headers, "Content-Type: application/sdp");
@@ -428,7 +441,7 @@ bool WHIPOutput::Connect()
 	auto doCleanup = [&](bool connectFailed) {
 		curl_easy_cleanup(c);
 		curl_slist_free_all(headers);
-		if (connectFailed) {
+		if (connectFailed && IsActiveGeneration(generation)) {
 			obs_output_signal_stop(output, OBS_OUTPUT_CONNECT_FAILED);
 		}
 	};
@@ -453,7 +466,8 @@ bool WHIPOutput::Connect()
 	if (response_code != 201) {
 		do_log(LOG_ERROR, "Connect failed: HTTP endpoint returned response code %ld", response_code);
 		doCleanup(false);
-		obs_output_signal_stop(output, OBS_OUTPUT_INVALID_STREAM);
+		if (IsActiveGeneration(generation))
+			obs_output_signal_stop(output, OBS_OUTPUT_INVALID_STREAM);
 		return false;
 	}
 
@@ -526,9 +540,14 @@ bool WHIPOutput::Connect()
 		return false;
 	}
 
-	resource_url = url;
+	attemptResourceURL = url;
+	if (IsActiveGeneration(generation)) {
+		std::lock_guard<std::mutex> rl(resource_mutex);
+		resource_url = attemptResourceURL;
+	}
 	curl_free(url);
-	do_log(LOG_DEBUG, "WHIP Resource URL is: %s", resource_url.c_str());
+	do_log(LOG_DEBUG, "[WHIP generation=%llu] WHIP Resource URL is: %s",
+	       static_cast<unsigned long long>(generation), attemptResourceURL.c_str());
 	curl_url_cleanup(url_builder);
 
 #ifdef DEBUG_SDP
@@ -555,20 +574,24 @@ bool WHIPOutput::Connect()
 	} catch (const std::invalid_argument &err) {
 		do_log(LOG_ERROR, "WHIP server responded with invalid SDP: %s", err.what());
 		doCleanup(true);
-		struct dstr error_message;
-		dstr_init_copy(&error_message, obs_module_text("Error.InvalidSDP"));
-		dstr_replace(&error_message, "%1", err.what());
-		obs_output_set_last_error(output, error_message.array);
-		dstr_free(&error_message);
+		if (IsActiveGeneration(generation)) {
+			struct dstr error_message;
+			dstr_init_copy(&error_message, obs_module_text("Error.InvalidSDP"));
+			dstr_replace(&error_message, "%1", err.what());
+			obs_output_set_last_error(output, error_message.array);
+			dstr_free(&error_message);
+		}
 		return false;
 	} catch (const std::exception &err) {
 		do_log(LOG_ERROR, "Failed to set remote description: %s", err.what());
 		doCleanup(true);
-		struct dstr error_message;
-		dstr_init_copy(&error_message, obs_module_text("Error.NoRemoteDescription"));
-		dstr_replace(&error_message, "%1", err.what());
-		obs_output_set_last_error(output, error_message.array);
-		dstr_free(&error_message);
+		if (IsActiveGeneration(generation)) {
+			struct dstr error_message;
+			dstr_init_copy(&error_message, obs_module_text("Error.NoRemoteDescription"));
+			dstr_replace(&error_message, "%1", err.what());
+			obs_output_set_last_error(output, error_message.array);
+			dstr_free(&error_message);
+		}
 		return false;
 	}
 	doCleanup(false);
@@ -580,15 +603,16 @@ bool WHIPOutput::Connect()
 	return true;
 }
 
-void WHIPOutput::StartThread()
+void WHIPOutput::StartThread(uint64_t generation)
 {
 	if (!Init())
 		return;
 
-	if (!Setup())
+	if (!Setup(generation))
 		return;
 
-	if (!Connect()) {
+	std::string attemptResourceURL;
+	if (!Connect(generation, attemptResourceURL)) {
 		peer_connection->close();
 		peer_connection = nullptr;
 		audio_track = nullptr;
@@ -596,14 +620,27 @@ void WHIPOutput::StartThread()
 		return;
 	}
 
+	if (!IsActiveGeneration(generation)) {
+		do_log(LOG_WARNING, "[WHIP generation=%llu] stale attempt became connected; deleting only its own resource",
+		       static_cast<unsigned long long>(generation));
+		if (peer_connection)
+			peer_connection->close();
+		peer_connection = nullptr;
+		audio_track = nullptr;
+		video_track = nullptr;
+		SendDelete(attemptResourceURL, generation, "stale_generation_after_connect");
+		return;
+	}
+
 	obs_output_begin_data_capture(output, 0);
 	running = true;
 }
 
-void WHIPOutput::SendDelete()
+void WHIPOutput::SendDelete(const std::string &resourceURL, uint64_t generation, const char *reason)
 {
-	if (resource_url.empty()) {
-		do_log(LOG_DEBUG, "No resource URL available, not sending DELETE");
+	if (resourceURL.empty()) {
+		do_log(LOG_DEBUG, "[WHIP generation=%llu] No resource URL available, not sending DELETE (%s)",
+		       static_cast<unsigned long long>(generation), reason ? reason : "unknown");
 		return;
 	}
 
@@ -620,7 +657,7 @@ void WHIPOutput::SendDelete()
 
 	CURL *c = curl_easy_init();
 	curl_easy_setopt(c, CURLOPT_HTTPHEADER, headers);
-	curl_easy_setopt(c, CURLOPT_URL, resource_url.c_str());
+	curl_easy_setopt(c, CURLOPT_URL, resourceURL.c_str());
 	curl_easy_setopt(c, CURLOPT_CUSTOMREQUEST, "DELETE");
 	curl_easy_setopt(c, CURLOPT_TIMEOUT, 8L);
 	curl_easy_setopt(c, CURLOPT_ERRORBUFFER, error_buffer);
@@ -632,7 +669,8 @@ void WHIPOutput::SendDelete()
 
 	CURLcode res = curl_easy_perform(c);
 	if (res != CURLE_OK) {
-		do_log(LOG_WARNING, "DELETE request for resource URL failed: %s",
+		do_log(LOG_WARNING, "[WHIP generation=%llu] DELETE request for resource URL failed (%s): %s",
+		       static_cast<unsigned long long>(generation), reason ? reason : "unknown",
 		       error_buffer[0] ? error_buffer : curl_easy_strerror(res));
 		doCleanup();
 		return;
@@ -641,18 +679,29 @@ void WHIPOutput::SendDelete()
 	long response_code;
 	curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &response_code);
 	if (response_code != 200) {
-		do_log(LOG_WARNING, "DELETE request for resource URL failed. HTTP Code: %ld", response_code);
+		do_log(LOG_WARNING, "[WHIP generation=%llu] DELETE request for resource URL failed (%s). HTTP Code: %ld",
+		       static_cast<unsigned long long>(generation), reason ? reason : "unknown", response_code);
 		doCleanup();
 		return;
 	}
 
-	do_log(LOG_DEBUG, "Successfully performed DELETE request for resource URL");
-	resource_url.clear();
+	do_log(LOG_DEBUG, "[WHIP generation=%llu] Successfully performed DELETE request for resource URL (%s)",
+	       static_cast<unsigned long long>(generation), reason ? reason : "unknown");
+	if (IsActiveGeneration(generation)) {
+		std::lock_guard<std::mutex> rl(resource_mutex);
+		if (resource_url == resourceURL)
+			resource_url.clear();
+	}
 	doCleanup();
 }
 
-void WHIPOutput::StopThread(bool signal)
+void WHIPOutput::StopThread(bool signal, uint64_t generation, std::string resourceURL)
 {
+	if (!resourceURL.empty()) {
+		do_log(LOG_DEBUG, "[WHIP generation=%llu] StopThread reason=%s resource=%s",
+		       static_cast<unsigned long long>(generation), signal ? "user_or_ui" : "internal_or_reconnect",
+		       resourceURL.c_str());
+	}
 	if (peer_connection != nullptr) {
 		peer_connection->close();
 		peer_connection = nullptr;
@@ -660,7 +709,7 @@ void WHIPOutput::StopThread(bool signal)
 		video_track = nullptr;
 	}
 
-	SendDelete();
+	SendDelete(resourceURL, generation, signal ? "stop_thread" : "reconnect_or_error");
 
 	/*
 	 * "signal" exists because we have to preserve the "running" state
@@ -680,6 +729,11 @@ void WHIPOutput::StopThread(bool signal)
 	start_time_ns = 0;
 	last_audio_timestamp = 0;
 	videoLayerStates.clear();
+}
+
+bool WHIPOutput::IsActiveGeneration(uint64_t generation) const
+{
+	return active_generation.load() == generation;
 }
 
 void WHIPOutput::Send(void *data, uintptr_t size, uint64_t duration, std::shared_ptr<rtc::Track> track,

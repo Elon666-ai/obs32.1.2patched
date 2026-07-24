@@ -8,6 +8,7 @@
 
 #include <string>
 #include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <thread>
 #include <algorithm>
@@ -39,24 +40,27 @@ private:
 	void ConfigureAudioTrack(std::string media_stream_id, std::string cname);
 	void ConfigureVideoTrack(std::string media_stream_id, std::string cname);
 	bool Init();
-	bool Setup();
-	bool Connect();
-	void StartThread();
-	void SendDelete();
-	void StopThread(bool signal);
+	bool Setup(uint64_t generation);
+	bool Connect(uint64_t generation, std::string &resourceURL);
+	void StartThread(uint64_t generation);
+	void SendDelete(const std::string &resourceURL, uint64_t generation, const char *reason);
+	void StopThread(bool signal, uint64_t generation, std::string resourceURL);
 	void ParseLinkHeader(std::string linkHeader, std::vector<rtc::IceServer> &iceServers);
 	void Send(void *data, uintptr_t size, uint64_t duration, std::shared_ptr<rtc::Track> track,
 		  std::shared_ptr<rtc::RtcpSrReporter> rtcp_sr_reporter);
+	bool IsActiveGeneration(uint64_t generation) const;
 
 	obs_output_t *output;
 
 	std::string endpoint_url;
 	std::string bearer_token;
 	std::string resource_url;
+	std::atomic<uint64_t> active_generation;
 
 	std::atomic<bool> running;
 
 	std::mutex start_stop_mutex;
+	std::mutex resource_mutex;
 	std::thread start_stop_thread;
 
 	uint32_t base_ssrc;
