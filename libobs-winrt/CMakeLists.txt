@@ -26,6 +26,8 @@ target_precompile_headers(
     <winrt/Windows.System.h>
 )
 
+target_compile_definitions(libobs-winrt PRIVATE _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
+
 target_link_libraries(libobs-winrt PRIVATE OBS::libobs OBS::COMutils Dwmapi windowsapp)
 
 set_target_properties_obs(libobs-winrt PROPERTIES FOLDER core)

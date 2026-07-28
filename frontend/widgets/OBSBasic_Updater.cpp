@@ -62,6 +62,9 @@ template<typename OBSRef> struct SignalContainer {
 
 void OBSBasic::ReceivedIntroJson(const QString &text)
 {
+	/* What's New disabled */
+	UNUSED_PARAMETER(text);
+	return;
 #ifdef WHATSNEW_ENABLED
 	if (isClosing()) {
 		return;
@@ -170,6 +173,8 @@ void OBSBasic::ShowWhatsNew(const QString &url)
 
 void OBSBasic::TimedCheckForUpdates()
 {
+	/* Automatic update check disabled */
+	return;
 	if (App()->IsUpdaterDisabled())
 		return;
 	if (!config_get_bool(App()->GetAppConfig(), "General", "EnableAutoUpdates"))
@@ -196,6 +201,9 @@ void OBSBasic::TimedCheckForUpdates()
 
 void OBSBasic::CheckForUpdates(bool manualUpdate)
 {
+	/* Update check disabled */
+	UNUSED_PARAMETER(manualUpdate);
+	return;
 #if _WIN32
 	ui->actionCheckForUpdates->setEnabled(false);
 	ui->actionRepair->setEnabled(false);
