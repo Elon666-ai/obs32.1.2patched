@@ -3,6 +3,10 @@
 
 #include <obs.hpp>
 
+#ifdef WHIP_DEGRADE_ACTIVE
+#include "degrade-client.h"
+#endif
+
 /*
  * Sets the maximum size for a video fragment. Effective range is
  * 576-1470, with a lower value equating to more packets created,
@@ -90,6 +94,10 @@ bool WHIPOutput::Start()
 
 void WHIPOutput::Stop(bool signal)
 {
+#ifdef WHIP_DEGRADE_ACTIVE
+	WsDegradeClient::Instance().UnregisterOutput();
+#endif
+
 	std::lock_guard<std::mutex> l(start_stop_mutex);
 	const uint64_t generation = active_generation.load();
 	std::string resourceURL;
@@ -634,6 +642,10 @@ void WHIPOutput::StartThread(uint64_t generation)
 
 	obs_output_begin_data_capture(output, 0);
 	running = true;
+
+#ifdef WHIP_DEGRADE_ACTIVE
+	WsDegradeClient::Instance().RegisterOutput(output);
+#endif
 }
 
 void WHIPOutput::SendDelete(const std::string &resourceURL, uint64_t generation, const char *reason)
