@@ -278,6 +278,15 @@ bool WHIPOutput::Init()
 	}
 
 	bearer_token = obs_service_get_connect_info(service, OBS_SERVICE_CONNECT_INFO_BEARER_TOKEN);
+	// If user didn't fill Bearer Token in UI, auto-inject WHIP_WS_SECRET
+	// so mmx WHIP publish auth passes (see obs-whip-publish-auth-protocol.md)
+	if (bearer_token.empty()) {
+		const char *env_secret = getenv("WHIP_WS_SECRET");
+		if (env_secret && env_secret[0])
+			bearer_token = env_secret;
+		else
+			bearer_token = "de4e53fe0b4565358cf5b47c89cc6dbbc0f902c62e4c2952";
+	}
 
 	return true;
 }
