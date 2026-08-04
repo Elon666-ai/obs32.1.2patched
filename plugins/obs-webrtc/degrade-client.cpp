@@ -94,10 +94,30 @@ WsDegradeClient::WsDegradeClient()
 	});
 
 	client.set_message_handler([this](handle_t h, client_t::message_ptr msg) {
-		do_log(LOG_DEBUG, "WS Rx: %s", msg->get_payload().c_str());
+		const std::string &payload = msg->get_payload();
+		do_log(LOG_DEBUG, "WS Rx: %s", payload.c_str());
+
 		TargetState ts;
-		if (ParseTargetState(msg->get_payload(), ts))
+		if (ParseTargetState(payload, ts)) {
 			ApplyIfNeeded(ts);
+			return;
+		}
+
+		// Protocol §2: terminate-state ALERT (no action, log only)
+		try {
+			auto j = nlohmann::json::parse(payload);
+			if (j.contains("type") &&
+			    j["type"] == "ALERT") {
+				std::string path = j.value("path", "");
+				std::string reason = j.value("reason", "");
+				do_log(LOG_INFO,
+				       "ALERT path=%s reason=%s",
+				       path.c_str(),
+				       reason.c_str());
+			}
+		} catch (const std::exception &) {
+			// not valid JSON for our purpose, ignore
+		}
 	});
 
 	worker = std::thread([this]() {
@@ -325,16 +345,26 @@ void WsDegradeClient::ApplyIfNeeded(const TargetState &target)
 		std::lock_guard<std::mutex> lk(mtx);
 
 		// --- Manipulate encoder slots so that WHIPOutput::Start()
-		//     only sees the first |new_layers| encoders ----------
+		//     only sees |new_layers| encoders ---------------------
+		//
+		// all_encoders[0] is the full-resolution encoder (highest),
+		// all_encoders[max_layers-1] is the lowest-resolution
+		// simulcast layer (see WHIPSimulcastEncoders::Create /
+		// SetStreamOutput). Per docs/obs-mmx-degrade-protocol.md
+		// ("层数减少的方向：从高分辨率层开始砍"), reducing layers must
+		// drop the highest-resolution layers first and keep the
+		// lowest-resolution ones - i.e. keep the tail of
+		// all_encoders, not the head.
 		//
 		// Remove superfluous encoders (null the slot)
 		for (int i = new_layers; i < MAX_OUTPUT_VIDEO_ENCODERS; i++) {
 			obs_output_set_video_encoder2(out_copy, nullptr, i);
 		}
 
-		// Restore cached encoders that were previously removed
-		for (int i = 0; i < new_layers && i < (int)all_encoders.size(); i++) {
-			obs_output_set_video_encoder2(out_copy, all_encoders[i], i);
+		// Restore the lowest-resolution |new_layers| cached encoders
+		int first_kept = max_layers - new_layers;
+		for (int i = 0; i < new_layers && (first_kept + i) < (int)all_encoders.size(); i++) {
+			obs_output_set_video_encoder2(out_copy, all_encoders[first_kept + i], i);
 		}
 
 		// --- Update bitrate on every active encoder ----------

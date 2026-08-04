@@ -113,6 +113,7 @@ void OBSBasicSettings::LoadStream1Settings()
 	bool use_custom_server = obs_data_get_bool(settings, "using_custom_server");
 	protocol = QT_UTF8(obs_service_get_protocol(service_obj));
 	const char *bearer_token = obs_data_get_string(settings, "bearer_token");
+	const char *backup_server = obs_data_get_string(settings, "backup_server");
 
 	if (is_rtmp_custom || is_whip)
 		ui->customServer->setText(server);
@@ -213,9 +214,14 @@ void OBSBasicSettings::LoadStream1Settings()
 	if (is_whip) {
 		ui->key->setText(bearer_token);
 		ui->whipSimulcastGroupBox->show();
+		ui->backupServer->setText(QT_UTF8(backup_server));
+		ui->backupServerLabel->setVisible(true);
+		ui->backupServer->setVisible(true);
 	} else {
 		ui->key->setText(key);
 		ui->whipSimulcastGroupBox->hide();
+		ui->backupServerLabel->setVisible(false);
+		ui->backupServer->setVisible(false);
 	}
 
 	ServiceChanged(true);
@@ -311,6 +317,7 @@ void OBSBasicSettings::SaveStream1Settings()
 	if (whip) {
 		obs_data_set_string(settings, "service", "WHIP");
 		obs_data_set_string(settings, "bearer_token", QT_TO_UTF8(ui->key->text()));
+		obs_data_set_string(settings, "backup_server", QT_TO_UTF8(ui->backupServer->text().trimmed()));
 	} else {
 		obs_data_set_string(settings, "key", QT_TO_UTF8(ui->key->text()));
 	}
@@ -600,8 +607,12 @@ void OBSBasicSettings::on_service_currentIndexChanged(int idx)
 
 	if (IsWHIP()) {
 		ui->whipSimulcastGroupBox->show();
+		ui->backupServerLabel->setVisible(true);
+		ui->backupServer->setVisible(true);
 	} else {
 		ui->whipSimulcastGroupBox->hide();
+		ui->backupServerLabel->setVisible(false);
+		ui->backupServer->setVisible(false);
 	}
 }
 
