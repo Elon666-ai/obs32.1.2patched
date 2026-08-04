@@ -903,6 +903,8 @@ bool AdvancedOutput::StartReplayBuffer()
 void AdvancedOutput::StopStreaming(bool force)
 {
 	auto output = StreamingOutput();
+	blog(LOG_WARNING, "[diag] AdvancedOutput::StopStreaming(force=%d) called, multitrackVideoActive=%d", force,
+	     multitrackVideo && multitrackVideoActive);
 	if (force && output)
 		obs_output_force_stop(output);
 	else if (multitrackVideo && multitrackVideoActive)

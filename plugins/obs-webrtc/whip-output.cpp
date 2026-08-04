@@ -67,6 +67,15 @@ bool WHIPOutput::Start()
 	std::lock_guard<std::mutex> l(start_stop_mutex);
 	const uint64_t generation = active_generation.fetch_add(1) + 1;
 
+	// Only automatic reconnect attempts (triggered by libobs after a
+	// disconnect) should preserve fail_since_ns/using_backup across
+	// Start() calls. A deliberate user-initiated start (Stop then Start,
+	// or the very first start) should always retry the primary server.
+	if (!obs_output_reconnecting(output)) {
+		using_backup = false;
+		fail_since_set = false;
+	}
+
 	for (uint32_t idx = 0; idx < MAX_OUTPUT_VIDEO_ENCODERS; idx++) {
 		auto encoder = obs_output_get_video_encoder2(output, idx);
 		if (encoder == nullptr) {
@@ -114,6 +123,15 @@ void WHIPOutput::Stop(bool signal)
 void WHIPOutput::Data(struct encoder_packet *packet)
 {
 	if (!packet) {
+		// Diagnostic-only addition: this branch silently calls
+		// Stop(false) -> OBS_OUTPUT_ENCODE_ERROR, which can_reconnect()
+		// in libobs/obs-output.c does NOT treat as reconnectable (only
+		// OBS_OUTPUT_DISCONNECTED is), and which - if it lands right
+		// after a just-succeeded reconnect (reconnecting flag already
+		// cleared by begin_delayed_capture) - looks to the user like
+		// the stream just silently died with no error message at all.
+		do_log(LOG_WARNING, "Data() called with null packet - stopping (no reconnect, OBS_OUTPUT_ENCODE_ERROR, was_reconnecting=%d)",
+		       obs_output_reconnecting(output));
 		Stop(false);
 		obs_output_signal_stop(output, OBS_OUTPUT_ENCODE_ERROR);
 		return;
@@ -127,6 +145,16 @@ void WHIPOutput::Data(struct encoder_packet *packet)
 		auto rtp_config = video_sr_reporter->rtpConfig;
 		auto videoLayerState = videoLayerStates[packet->encoder];
 		if (videoLayerState == nullptr) {
+			// Diagnostic-only addition: same silent-stop concern as
+			// above. packet->encoder not being a key in
+			// videoLayerStates means either (a) a packet from a stale
+			// encoder is still in flight after Start() rebuilt the map
+			// (plausible right after a fast reconnect), or (b) the map
+			// is simply empty/wrong for some other reason - this log
+			// records enough to tell those apart next time.
+			do_log(LOG_WARNING,
+			       "Data() video packet encoder=%p not found in videoLayerStates (size=%zu) - stopping (no reconnect, OBS_OUTPUT_ENCODE_ERROR, was_reconnecting=%d)",
+			       (void *)packet->encoder, videoLayerStates.size(), obs_output_reconnecting(output));
 			Stop(false);
 			obs_output_signal_stop(output, OBS_OUTPUT_ENCODE_ERROR);
 			return;
@@ -271,7 +299,31 @@ bool WHIPOutput::Init()
 		return false;
 	}
 
-	endpoint_url = obs_service_get_connect_info(service, OBS_SERVICE_CONNECT_INFO_SERVER_URL);
+	// Check for fallback: if primary has been failing >30s and a backup
+	// is configured, switch.  Failing on backup >30s → switch back.
+	const char *backup_url_c =
+		obs_service_get_connect_info(service,
+					     OBS_SERVICE_CONNECT_INFO_BACKUP_SERVER);
+
+	if (ShouldFallback(backup_url_c ? backup_url_c : "")) {
+		using_backup = !using_backup;
+		fail_since_set = false;
+		do_log(LOG_INFO, "Fallback: switching to %s server (%s)",
+		       using_backup ? "backup" : "primary",
+		       using_backup ? backup_url_c :
+				      obs_service_get_connect_info(
+					      service,
+					      OBS_SERVICE_CONNECT_INFO_SERVER_URL));
+	}
+
+	if (using_backup && backup_url_c && backup_url_c[0]) {
+		endpoint_url = backup_url_c;
+	} else {
+		endpoint_url = obs_service_get_connect_info(
+			service, OBS_SERVICE_CONNECT_INFO_SERVER_URL);
+		using_backup = false;
+	}
+
 	if (endpoint_url.empty()) {
 		obs_output_signal_stop(output, OBS_OUTPUT_BAD_PATH);
 		return false;
@@ -324,14 +376,17 @@ bool WHIPOutput::Setup(uint64_t generation)
 			do_log(LOG_INFO, "PeerConnection state is now: Connected");
 			connect_time_ms = (int)((os_gettime_ns() - start_time_ns) / 1000000.0);
 			do_log(LOG_INFO, "Connect time: %dms", connect_time_ms.load());
+			MarkConnected();
 			break;
 		case rtc::PeerConnection::State::Disconnected:
 			do_log(LOG_INFO, "PeerConnection state is now: Disconnected");
+			MarkDisconnected();
 			Stop(false);
 			obs_output_signal_stop(output, OBS_OUTPUT_DISCONNECTED);
 			break;
 		case rtc::PeerConnection::State::Failed:
 			do_log(LOG_INFO, "PeerConnection state is now: Failed");
+			MarkDisconnected();
 			Stop(false);
 			obs_output_signal_stop(output, OBS_OUTPUT_ERROR);
 			break;
@@ -459,7 +514,7 @@ bool WHIPOutput::Connect(uint64_t generation, std::string &attemptResourceURL)
 		curl_easy_cleanup(c);
 		curl_slist_free_all(headers);
 		if (connectFailed && IsActiveGeneration(generation)) {
-			obs_output_signal_stop(output, OBS_OUTPUT_CONNECT_FAILED);
+			obs_output_signal_stop(output, OBS_OUTPUT_DISCONNECTED);
 		}
 	};
 
@@ -484,7 +539,7 @@ bool WHIPOutput::Connect(uint64_t generation, std::string &attemptResourceURL)
 		do_log(LOG_ERROR, "Connect failed: HTTP endpoint returned response code %ld", response_code);
 		doCleanup(false);
 		if (IsActiveGeneration(generation))
-			obs_output_signal_stop(output, OBS_OUTPUT_INVALID_STREAM);
+			obs_output_signal_stop(output, OBS_OUTPUT_DISCONNECTED);
 		return false;
 	}
 
@@ -630,6 +685,7 @@ void WHIPOutput::StartThread(uint64_t generation)
 
 	std::string attemptResourceURL;
 	if (!Connect(generation, attemptResourceURL)) {
+		MarkDisconnected();
 		peer_connection->close();
 		peer_connection = nullptr;
 		audio_track = nullptr;
@@ -755,6 +811,51 @@ void WHIPOutput::StopThread(bool signal, uint64_t generation, std::string resour
 bool WHIPOutput::IsActiveGeneration(uint64_t generation) const
 {
 	return active_generation.load() == generation;
+}
+
+// -------------------------------------------------------------------
+// Fallback helpers
+// -------------------------------------------------------------------
+void WHIPOutput::MarkDisconnected()
+{
+	if (!fail_since_set) {
+		fail_since_ns = os_gettime_ns();
+		fail_since_set = true;
+		do_log(LOG_INFO,
+		       "Failover: recording disconnect time, using_backup=%d",
+		       (int)using_backup);
+	}
+}
+
+void WHIPOutput::MarkConnected()
+{
+	if (fail_since_set) {
+		int64_t elapsed_ns = os_gettime_ns() - fail_since_ns;
+		do_log(LOG_INFO,
+		       "Failover: connected after %.1fs on %s server, resetting timer",
+		       (double)elapsed_ns / 1e9,
+		       using_backup ? "backup" : "primary");
+	}
+	fail_since_set = false;
+	fail_since_ns = 0;
+}
+
+bool WHIPOutput::ShouldFallback(const std::string &backup_url)
+{
+	if (!fail_since_set)
+		return false;
+	if (backup_url.empty())
+		return false;
+
+	int64_t elapsed_ns = os_gettime_ns() - fail_since_ns;
+	if (elapsed_ns < 30LL * 1000000000LL)
+		return false;
+
+	do_log(LOG_INFO,
+	       "Failover: %.1fs elapsed, triggering switch from %s",
+	       (double)elapsed_ns / 1e9,
+	       using_backup ? "backup" : "primary");
+	return true;
 }
 
 void WHIPOutput::Send(void *data, uintptr_t size, uint64_t duration, std::shared_ptr<rtc::Track> track,

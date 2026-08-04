@@ -58,8 +58,11 @@ private:
 	int last_pct;
 
 	// Cached encoder pointers (all slots), saved at RegisterOutput time.
-	// We use obs_output_set_video_encoder2(out, nullptr, idx) to
-	// temporarily remove layers beyond the target count.
+	// Index 0 is the highest-resolution (full-res) encoder, index
+	// max_layers-1 is the lowest-resolution simulcast layer. We use
+	// obs_output_set_video_encoder2(out, nullptr, idx) to temporarily
+	// remove the highest-resolution layers when degrading (see
+	// docs/obs-mmx-degrade-protocol.md).
 	std::vector<obs_encoder_t *> all_encoders;
 	int max_layers;
 };

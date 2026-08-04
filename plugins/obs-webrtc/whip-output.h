@@ -49,6 +49,9 @@ private:
 	void Send(void *data, uintptr_t size, uint64_t duration, std::shared_ptr<rtc::Track> track,
 		  std::shared_ptr<rtc::RtcpSrReporter> rtcp_sr_reporter);
 	bool IsActiveGeneration(uint64_t generation) const;
+	void MarkDisconnected();
+	void MarkConnected();
+	bool ShouldFallback(const std::string &backup_url);
 
 	obs_output_t *output;
 
@@ -76,6 +79,14 @@ private:
 	std::atomic<int> connect_time_ms;
 	int64_t start_time_ns;
 	int64_t last_audio_timestamp;
+
+	// Fallback / failover state. Written from both the start/stop thread
+	// (Init/StartThread) and the PeerConnection state-change callback
+	// (which runs on a different thread), so these need to be atomic
+	// for cross-thread visibility even though they're simple flags.
+	std::atomic<bool> using_backup{false};
+	std::atomic<int64_t> fail_since_ns{0};
+	std::atomic<bool> fail_since_set{false};
 };
 
 void register_whip_output();
