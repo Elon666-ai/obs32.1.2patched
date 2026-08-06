@@ -108,6 +108,8 @@ target_sources(
     util/file-serializer.h
     util/lexer.c
     util/lexer.h
+    util/ntp-clock.c
+    util/ntp-clock.h
     util/pipe.c
     util/pipe.h
     util/platform.c

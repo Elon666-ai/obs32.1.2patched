@@ -19,6 +19,7 @@
 
 #include "graphics/matrix4.h"
 #include "callback/calldata.h"
+#include "util/ntp-clock.h"
 
 #include "obs.h"
 #include "obs-internal.h"
@@ -1331,6 +1332,8 @@ bool obs_startup(const char *locale, const char *module_config_path, profiler_na
 #endif
 
 	success = obs_init(locale, module_config_path, store);
+	if (success)
+		ntp_clock_init();
 	profile_end(obs_startup_name);
 	if (!success)
 		obs_shutdown();
@@ -1377,6 +1380,8 @@ struct obs_cmdline_args obs_get_cmdline_args(void)
 void obs_shutdown(void)
 {
 	struct obs_module *module;
+
+	ntp_clock_free();
 
 	obs_wait_for_destroy_queue();
 

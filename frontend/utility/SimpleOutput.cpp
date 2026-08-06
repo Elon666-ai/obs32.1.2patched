@@ -1,5 +1,6 @@
 #include "SimpleOutput.hpp"
 
+#include <abs-ts.h>
 #include <utility/audio-encoders.hpp>
 #include <utility/StartMultiTrackVideoStreamingGuard.hpp>
 #include <widgets/OBSBasic.hpp>
@@ -628,6 +629,8 @@ std::shared_future<void> SimpleOutput::SetupStreaming(obs_service_t *service, Se
 				blog(LOG_WARNING, "Creation of stream output type '%s' failed!", type.c_str());
 				return false;
 			}
+
+			obs_output_add_packet_callback(streamOutput, abs_ts_sei_inject, nullptr);
 
 			streamDelayStarting.Connect(obs_output_get_signal_handler(streamOutput), "starting",
 						    OBSStreamStarting, this);
