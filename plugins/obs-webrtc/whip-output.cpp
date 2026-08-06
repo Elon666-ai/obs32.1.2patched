@@ -377,12 +377,6 @@ bool WHIPOutput::Setup(uint64_t generation)
 
 	peer_connection = std::make_shared<rtc::PeerConnection>(cfg);
 
-	// Side channel for per-frame push timestamps; see
-	// docs/obs-abs-timestamp-protocol.md. Best-effort only: if the
-	// remote end doesn't accept it, sends below are just no-ops since
-	// timestamp_channel never reports isOpen().
-	timestamp_channel = peer_connection->createDataChannel("obs-timestamp");
-
 	peer_connection->onStateChange([this, generation](rtc::PeerConnection::State state) {
 		if (!IsActiveGeneration(generation)) {
 			do_log(LOG_DEBUG, "[WHIP generation=%llu] ignoring stale PeerConnection state change: %d",
@@ -433,6 +427,14 @@ bool WHIPOutput::Setup(uint64_t generation)
 
 	ConfigureAudioTrack(media_stream_id, cname);
 	ConfigureVideoTrack(media_stream_id, cname);
+
+	// Side channel for per-frame push timestamps; see
+	// docs/obs-abs-timestamp-protocol.md. Best-effort only: if the
+	// remote end doesn't accept it, sends below are just no-ops since
+	// timestamp_channel never reports isOpen(). Must be created AFTER
+	// addTrack (Configure*Track) calls so libdatachannel includes
+	// both the DataChannel and the media m-lines in the SDP offer.
+	timestamp_channel = peer_connection->createDataChannel("obs-timestamp");
 
 	peer_connection->setLocalDescription();
 
