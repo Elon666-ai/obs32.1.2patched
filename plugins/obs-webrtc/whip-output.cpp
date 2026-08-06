@@ -4,6 +4,8 @@
 #include <obs.hpp>
 #include <util/ntp-clock.h>
 
+#include <chrono>
+
 #include <nlohmann/json.hpp>
 
 #ifdef WHIP_DEGRADE_ACTIVE
@@ -16,6 +18,21 @@
  * but also better network compatability.
  */
 static uint16_t MAX_VIDEO_FRAGMENT_SIZE = 1200;
+
+/*
+ * libdatachannel's ICE agent (unlike e.g. Pion, used on the MMX/server
+ * side) reports PeerConnection::State::Disconnected the moment ICE
+ * connectivity checks start failing, with no built-in tolerance for a
+ * transient blip. Reacting to that immediately by tearing down and
+ * rebuilding the whole WHIP session (DELETE + new POST + fresh ICE +
+ * DTLS) is far more disruptive than the network hiccup that triggered
+ * it - most Disconnected states self-recover within a few seconds.
+ * This grace period gives the ICE agent time to recover on its own
+ * before we give up; PeerConnection::State::Failed (which libdatachannel
+ * only reports once ICE has actually given up) is still handled
+ * immediately, with no grace period.
+ */
+static const int WHIP_DISCONNECT_GRACE_SEC = 10;
 
 const int signaling_media_id_length = 16;
 const char signaling_media_id_valid_char[] = "0123456789"
@@ -106,6 +123,11 @@ bool WHIPOutput::Start()
 
 void WHIPOutput::Stop(bool signal)
 {
+	// Whatever the reason we're stopping (user request, Failed state, or
+	// the grace timer below giving up), any pending Disconnected grace
+	// timer is now moot.
+	CancelDisconnectGraceTimer();
+
 #ifdef WHIP_DEGRADE_ACTIVE
 	WsDegradeClient::Instance().UnregisterOutput();
 #endif
@@ -391,12 +413,13 @@ bool WHIPOutput::Setup(uint64_t generation)
 			connect_time_ms = (int)((os_gettime_ns() - start_time_ns) / 1000000.0);
 			do_log(LOG_INFO, "Connect time: %dms", connect_time_ms.load());
 			MarkConnected();
+			CancelDisconnectGraceTimer();
 			break;
 		case rtc::PeerConnection::State::Disconnected:
-			do_log(LOG_INFO, "PeerConnection state is now: Disconnected");
-			MarkDisconnected();
-			Stop(false);
-			obs_output_signal_stop(output, OBS_OUTPUT_DISCONNECTED);
+			do_log(LOG_INFO,
+			       "PeerConnection state is now: Disconnected - waiting up to %ds for it to recover before tearing down",
+			       WHIP_DISCONNECT_GRACE_SEC);
+			StartDisconnectGraceTimer(generation);
 			break;
 		case rtc::PeerConnection::State::Failed:
 			do_log(LOG_INFO, "PeerConnection state is now: Failed");
@@ -881,6 +904,57 @@ bool WHIPOutput::ShouldFallback(const std::string &backup_url)
 	       (double)elapsed_ns / 1e9,
 	       using_backup ? "backup" : "primary");
 	return true;
+}
+
+// -------------------------------------------------------------------
+// Disconnected grace period (see WHIP_DISCONNECT_GRACE_SEC above)
+// -------------------------------------------------------------------
+void WHIPOutput::StartDisconnectGraceTimer(uint64_t generation)
+{
+	// Cancel/join any previous timer first; this always runs on the
+	// PeerConnection callback thread, never on disconnect_grace_thread
+	// itself, so the join below is safe.
+	CancelDisconnectGraceTimer();
+
+	{
+		std::lock_guard<std::mutex> lk(disconnect_grace_mutex);
+		disconnect_grace_cancel = false;
+	}
+
+	disconnect_grace_thread = std::thread([this, generation]() {
+		std::unique_lock<std::mutex> lk(disconnect_grace_mutex);
+		bool cancelled = disconnect_grace_cv.wait_for(lk, std::chrono::seconds(WHIP_DISCONNECT_GRACE_SEC),
+							      [this]() { return disconnect_grace_cancel; });
+		lk.unlock();
+
+		if (cancelled)
+			return;
+		if (!IsActiveGeneration(generation))
+			return;
+
+		do_log(LOG_INFO,
+		       "PeerConnection stayed Disconnected for %ds without recovering, tearing down and reconnecting",
+		       WHIP_DISCONNECT_GRACE_SEC);
+		MarkDisconnected();
+		Stop(false);
+		obs_output_signal_stop(output, OBS_OUTPUT_DISCONNECTED);
+	});
+}
+
+void WHIPOutput::CancelDisconnectGraceTimer()
+{
+	{
+		std::lock_guard<std::mutex> lk(disconnect_grace_mutex);
+		disconnect_grace_cancel = true;
+	}
+	disconnect_grace_cv.notify_all();
+
+	// Guard against self-join: this is called from Stop(), which the
+	// timer thread itself calls once its grace period expires. Joining
+	// our own thread would deadlock (or throw), so just leave it to be
+	// reaped the next time this is called from a different thread.
+	if (disconnect_grace_thread.joinable() && disconnect_grace_thread.get_id() != std::this_thread::get_id())
+		disconnect_grace_thread.join();
 }
 
 void WHIPOutput::Send(void *data, uintptr_t size, uint64_t duration, std::shared_ptr<rtc::Track> track,
