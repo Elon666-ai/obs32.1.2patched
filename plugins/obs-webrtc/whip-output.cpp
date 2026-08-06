@@ -148,18 +148,13 @@ void WHIPOutput::Data(struct encoder_packet *packet)
 		auto rtp_config = video_sr_reporter->rtpConfig;
 		auto videoLayerState = videoLayerStates[packet->encoder];
 		if (videoLayerState == nullptr) {
-			// Diagnostic-only addition: same silent-stop concern as
-			// above. packet->encoder not being a key in
-			// videoLayerStates means either (a) a packet from a stale
-			// encoder is still in flight after Start() rebuilt the map
-			// (plausible right after a fast reconnect), or (b) the map
-			// is simply empty/wrong for some other reason - this log
-			// records enough to tell those apart next time.
-			do_log(LOG_WARNING,
-			       "Data() video packet encoder=%p not found in videoLayerStates (size=%zu) - stopping (no reconnect, OBS_OUTPUT_ENCODE_ERROR, was_reconnecting=%d)",
-			       (void *)packet->encoder, videoLayerStates.size(), obs_output_reconnecting(output));
-			Stop(false);
-			obs_output_signal_stop(output, OBS_OUTPUT_ENCODE_ERROR);
+			// Stale encoder packet in flight after reconnect:
+			// Start() rebuilt the map with new encoders, but
+			// old encoder packets can still arrive. Drop
+			// silently instead of killing the stream.
+			do_log(LOG_DEBUG,
+			       "Data() video packet encoder=%p not found in videoLayerStates (size=%zu) - dropping stale packet",
+			       (void *)packet->encoder, videoLayerStates.size());
 			return;
 		}
 
