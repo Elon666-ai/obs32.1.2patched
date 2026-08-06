@@ -73,6 +73,10 @@ private:
 	std::shared_ptr<rtc::RtcpSrReporter> audio_sr_reporter;
 	std::shared_ptr<rtc::RtcpSrReporter> video_sr_reporter;
 
+	// Data channel carrying {frame_no, timestamp, rid} JSON per video
+	// frame per simulcast layer; see docs/obs-abs-timestamp-protocol.md.
+	std::shared_ptr<rtc::DataChannel> timestamp_channel;
+
 	std::map<obs_encoder_t *, std::shared_ptr<videoLayerState>> videoLayerStates;
 
 	std::atomic<size_t> total_bytes_sent;

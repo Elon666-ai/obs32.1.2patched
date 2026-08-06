@@ -6,6 +6,7 @@
 
 #include <OBSApp.hpp>
 
+#include <abs-ts.h>
 #include <bpm.h>
 #include <util/dstr.hpp>
 #include <libavformat/avformat.h>
@@ -475,6 +476,9 @@ void MultitrackVideoOutput::PrepareStreaming(
 	// Register the BPM (Broadcast Performance Metrics) callback
 	obs_output_add_packet_callback(output, bpm_inject, NULL);
 
+	// Register the absolute-timestamp SEI callback
+	obs_output_add_packet_callback(output, abs_ts_sei_inject, NULL);
+
 	// Set callback to prevent reconnection attempts once the stream key has become invalid
 	static auto reconnect_cb = [](void *param, obs_output_t *, int code) -> bool {
 		auto _this = static_cast<MultitrackVideoOutput *>(param);
@@ -915,6 +919,9 @@ void StreamStopHandler(void *arg, calldata_t *data)
 	/* Unregister the BPM (Broadcast Performance Metrics) callback and destroy the allocated metrics data. */
 	obs_output_remove_packet_callback(static_cast<obs_output_t *>(calldata_ptr(data, "output")), bpm_inject, NULL);
 	bpm_destroy(static_cast<obs_output_t *>(calldata_ptr(data, "output")));
+
+	obs_output_remove_packet_callback(static_cast<obs_output_t *>(calldata_ptr(data, "output")), abs_ts_sei_inject,
+					  NULL);
 
 	MultitrackVideoOutput::ReleaseOnMainThread(self->take_current());
 }

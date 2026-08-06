@@ -2,6 +2,9 @@
 #include "whip-utils.h"
 
 #include <obs.hpp>
+#include <util/ntp-clock.h>
+
+#include <nlohmann/json.hpp>
 
 #ifdef WHIP_DEGRADE_ACTIVE
 #include "degrade-client.h"
@@ -165,6 +168,22 @@ void WHIPOutput::Data(struct encoder_packet *packet)
 		rtp_config->rid = videoLayerState->rid;
 		rtp_config->timestamp = videoLayerState->rtpTimestamp;
 		int64_t duration = packet->dts_usec - videoLayerState->lastVideoTimestamp;
+
+		// frame_no is the starting RTP sequence number for this frame's
+		// first packet (it wraps at 65536 same as the RTP field itself).
+		// See docs/obs-abs-timestamp-protocol.md.
+		if (timestamp_channel && timestamp_channel->isOpen()) {
+			nlohmann::json ts_msg = {
+				{"frame_no", videoLayerState->sequenceNumber},
+				{"timestamp", ntp_clock_now_ms()},
+				{"rid", videoLayerState->rid},
+			};
+			try {
+				timestamp_channel->send(ts_msg.dump());
+			} catch (const std::exception &e) {
+				do_log(LOG_DEBUG, "timestamp_channel send failed: %s", e.what());
+			}
+		}
 
 		Send(packet->data, packet->size, duration, video_track, video_sr_reporter);
 
@@ -357,6 +376,12 @@ bool WHIPOutput::Setup(uint64_t generation)
 #endif
 
 	peer_connection = std::make_shared<rtc::PeerConnection>(cfg);
+
+	// Side channel for per-frame push timestamps; see
+	// docs/obs-abs-timestamp-protocol.md. Best-effort only: if the
+	// remote end doesn't accept it, sends below are just no-ops since
+	// timestamp_channel never reports isOpen().
+	timestamp_channel = peer_connection->createDataChannel("obs-timestamp");
 
 	peer_connection->onStateChange([this, generation](rtc::PeerConnection::State state) {
 		if (!IsActiveGeneration(generation)) {
@@ -690,6 +715,7 @@ void WHIPOutput::StartThread(uint64_t generation)
 		peer_connection = nullptr;
 		audio_track = nullptr;
 		video_track = nullptr;
+		timestamp_channel = nullptr;
 		return;
 	}
 
@@ -701,6 +727,7 @@ void WHIPOutput::StartThread(uint64_t generation)
 		peer_connection = nullptr;
 		audio_track = nullptr;
 		video_track = nullptr;
+		timestamp_channel = nullptr;
 		SendDelete(attemptResourceURL, generation, "stale_generation_after_connect");
 		return;
 	}
@@ -784,6 +811,7 @@ void WHIPOutput::StopThread(bool signal, uint64_t generation, std::string resour
 		peer_connection = nullptr;
 		audio_track = nullptr;
 		video_track = nullptr;
+		timestamp_channel = nullptr;
 	}
 
 	SendDelete(resourceURL, generation, signal ? "stop_thread" : "reconnect_or_error");

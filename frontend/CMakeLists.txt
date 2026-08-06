@@ -26,6 +26,10 @@ if(NOT TARGET OBS::bpm)
   add_subdirectory("${CMAKE_SOURCE_DIR}/shared/bpm" bpm)
 endif()
 
+if(NOT TARGET OBS::abs-ts)
+  add_subdirectory("${CMAKE_SOURCE_DIR}/shared/abs-ts" abs-ts)
+endif()
+
 add_executable(obs-studio)
 add_executable(OBS::studio ALIAS obs-studio)
 
@@ -40,6 +44,7 @@ target_link_libraries(
     OBS::frontend-api
     OBS::json11
     OBS::bpm
+    OBS::abs-ts
 )
 
 include(cmake/ui-components.cmake)
