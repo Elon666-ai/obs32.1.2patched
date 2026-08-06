@@ -438,7 +438,7 @@ void OBSBasic::on_actionShowWhatsNew_triggered()
 void OBSBasic::on_actionReleaseNotes_triggered()
 {
 	QString addr("https://github.com/Elon666-ai/obs32.1.2patched/releases");
-	QUrl url(QString("%1/%2").arg(addr, obs_get_version_string()), QUrl::TolerantMode);
+	QUrl url(addr, QUrl::TolerantMode);
 	QDesktopServices::openUrl(url);
 }
 
