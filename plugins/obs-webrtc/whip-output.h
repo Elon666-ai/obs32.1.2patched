@@ -8,6 +8,7 @@
 
 #include <string>
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <mutex>
 #include <thread>
@@ -52,6 +53,8 @@ private:
 	void MarkDisconnected();
 	void MarkConnected();
 	bool ShouldFallback(const std::string &backup_url);
+	void StartDisconnectGraceTimer(uint64_t generation);
+	void CancelDisconnectGraceTimer();
 
 	obs_output_t *output;
 
@@ -91,6 +94,14 @@ private:
 	std::atomic<bool> using_backup{false};
 	std::atomic<int64_t> fail_since_ns{0};
 	std::atomic<bool> fail_since_set{false};
+
+	// Grace period before a PeerConnection "Disconnected" state is
+	// treated as a real failure (see docs on WHIP_DISCONNECT_GRACE_SEC
+	// in whip-output.cpp for why this exists).
+	std::thread disconnect_grace_thread;
+	std::mutex disconnect_grace_mutex;
+	std::condition_variable disconnect_grace_cv;
+	bool disconnect_grace_cancel = false;
 };
 
 void register_whip_output();
