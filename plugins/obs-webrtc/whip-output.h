@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
+#include <shared_mutex>
 #include <thread>
 #include <algorithm>
 
@@ -75,11 +76,23 @@ private:
 	// and reads these; StartThread()/StopThread() run on start_stop_thread
 	// and null them out on teardown. Without this lock, Data() can read a
 	// shared_ptr while it's concurrently being reset elsewhere - a data
-	// race on the shared_ptr control block, not just a stale-pointer
-	// issue, that corrupts memory rather than just crashing outright.
+	// race on the shared_ptr control block itself, which corrupts memory.
 	// Root-caused a hung/crashed OBS process after ~11h of overnight
 	// streaming (RTC worker thread SEH exception, then eventual hang).
-	std::mutex tracks_mutex;
+	//
+	// A shared_mutex (not a plain mutex) because holding a lock only long
+	// enough to snapshot the shared_ptrs is not sufficient by itself:
+	// track->send()/peer_connection->close() must not run concurrently,
+	// since close() tears down the transport the RTC worker thread uses
+	// to actually deliver an in-flight send() - a second, deeper race
+	// than the shared_ptr one above, previously seen crashing the RTC
+	// worker thread inside datachannel.dll. Data()/Send() hold the shared
+	// (reader) lock for the full duration of the send call (multiple
+	// encoder threads may send concurrently); StartThread()/StopThread()
+	// take the exclusive (writer) lock around peer_connection->close()
+	// and nulling the members, so a close() can never run while a send()
+	// is still in flight.
+	std::shared_mutex tracks_mutex;
 
 	uint32_t base_ssrc;
 	std::shared_ptr<rtc::PeerConnection> peer_connection;
