@@ -162,28 +162,22 @@ void WHIPOutput::Data(struct encoder_packet *packet)
 		return;
 	}
 
-	// Snapshot the track/channel shared_ptrs under lock rather than
-	// reading the members directly: StopThread() (running on
-	// start_stop_thread) nulls them out on teardown/reconnect with the
-	// same lock held, and Data() runs on an OBS encoder thread. Without
-	// this, a concurrent reset here could race the reset there - not
-	// just a stale-pointer read, but a data race on the shared_ptr
-	// control block itself, which corrupts memory. Root-caused an OBS
-	// crash/hang after ~11h of overnight streaming (RTC worker thread
-	// SEH exception, then eventual process hang).
-	std::shared_ptr<rtc::Track> local_audio_track;
-	std::shared_ptr<rtc::Track> local_video_track;
-	std::shared_ptr<rtc::DataChannel> local_timestamp_channel;
-	std::shared_ptr<rtc::RtcpSrReporter> local_audio_sr_reporter;
-	std::shared_ptr<rtc::RtcpSrReporter> local_video_sr_reporter;
-	{
-		std::lock_guard<std::mutex> lk(tracks_mutex);
-		local_audio_track = audio_track;
-		local_video_track = video_track;
-		local_timestamp_channel = timestamp_channel;
-		local_audio_sr_reporter = audio_sr_reporter;
-		local_video_sr_reporter = video_sr_reporter;
-	}
+	// Hold the shared (reader) lock for the whole function, not just
+	// while snapshotting the shared_ptrs: StartThread()/StopThread()
+	// take the exclusive (writer) lock around peer_connection->close(),
+	// so this also blocks a close() from running concurrently with the
+	// track->send() calls below. Without that, close() can tear down
+	// the transport out from under a send() that libdatachannel's RTC
+	// worker thread is still in the middle of delivering - a deeper
+	// race than the shared_ptr one, previously seen crashing the RTC
+	// worker thread inside datachannel.dll. Root-caused an OBS
+	// crash/hang after ~11h of overnight streaming.
+	std::shared_lock<std::shared_mutex> lk(tracks_mutex);
+	std::shared_ptr<rtc::Track> local_audio_track = audio_track;
+	std::shared_ptr<rtc::Track> local_video_track = video_track;
+	std::shared_ptr<rtc::DataChannel> local_timestamp_channel = timestamp_channel;
+	std::shared_ptr<rtc::RtcpSrReporter> local_audio_sr_reporter = audio_sr_reporter;
+	std::shared_ptr<rtc::RtcpSrReporter> local_video_sr_reporter = video_sr_reporter;
 
 	if (local_audio_track && packet->type == OBS_ENCODER_AUDIO) {
 		int64_t duration = packet->dts_usec - last_audio_timestamp;
@@ -259,7 +253,7 @@ void WHIPOutput::ConfigureAudioTrack(std::string media_stream_id, std::string cn
 	packetizer->addToChain(nack_responder);
 	new_audio_track->setMediaHandler(packetizer);
 
-	std::lock_guard<std::mutex> lk(tracks_mutex);
+	std::unique_lock<std::shared_mutex> lk(tracks_mutex);
 	audio_track = new_audio_track;
 	audio_sr_reporter = new_audio_sr_reporter;
 }
@@ -348,7 +342,7 @@ void WHIPOutput::ConfigureVideoTrack(std::string media_stream_id, std::string cn
 	auto new_video_track = peer_connection->addTrack(video_description);
 	new_video_track->setMediaHandler(packetizer);
 
-	std::lock_guard<std::mutex> lk(tracks_mutex);
+	std::unique_lock<std::shared_mutex> lk(tracks_mutex);
 	video_track = new_video_track;
 	video_sr_reporter = new_video_sr_reporter;
 }
@@ -485,7 +479,7 @@ bool WHIPOutput::Setup(uint64_t generation)
 	// both the DataChannel and the media m-lines in the SDP offer.
 	auto new_timestamp_channel = peer_connection->createDataChannel("obs-timestamp");
 	{
-		std::lock_guard<std::mutex> lk(tracks_mutex);
+		std::unique_lock<std::shared_mutex> lk(tracks_mutex);
 		timestamp_channel = new_timestamp_channel;
 	}
 
@@ -766,10 +760,10 @@ void WHIPOutput::StartThread(uint64_t generation)
 	std::string attemptResourceURL;
 	if (!Connect(generation, attemptResourceURL)) {
 		MarkDisconnected();
-		peer_connection->close();
-		peer_connection = nullptr;
 		{
-			std::lock_guard<std::mutex> lk(tracks_mutex);
+			std::unique_lock<std::shared_mutex> lk(tracks_mutex);
+			peer_connection->close();
+			peer_connection = nullptr;
 			audio_track = nullptr;
 			video_track = nullptr;
 			timestamp_channel = nullptr;
@@ -780,11 +774,11 @@ void WHIPOutput::StartThread(uint64_t generation)
 	if (!IsActiveGeneration(generation)) {
 		do_log(LOG_WARNING, "[WHIP generation=%llu] stale attempt became connected; deleting only its own resource",
 		       static_cast<unsigned long long>(generation));
-		if (peer_connection)
-			peer_connection->close();
-		peer_connection = nullptr;
 		{
-			std::lock_guard<std::mutex> lk(tracks_mutex);
+			std::unique_lock<std::shared_mutex> lk(tracks_mutex);
+			if (peer_connection)
+				peer_connection->close();
+			peer_connection = nullptr;
 			audio_track = nullptr;
 			video_track = nullptr;
 			timestamp_channel = nullptr;
@@ -868,9 +862,9 @@ void WHIPOutput::StopThread(bool signal, uint64_t generation, std::string resour
 		       resourceURL.c_str());
 	}
 	if (peer_connection != nullptr) {
+		std::unique_lock<std::shared_mutex> lk(tracks_mutex);
 		peer_connection->close();
 		peer_connection = nullptr;
-		std::lock_guard<std::mutex> lk(tracks_mutex);
 		audio_track = nullptr;
 		video_track = nullptr;
 		timestamp_channel = nullptr;
