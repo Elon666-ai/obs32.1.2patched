@@ -162,12 +162,35 @@ void WHIPOutput::Data(struct encoder_packet *packet)
 		return;
 	}
 
-	if (audio_track && packet->type == OBS_ENCODER_AUDIO) {
+	// Snapshot the track/channel shared_ptrs under lock rather than
+	// reading the members directly: StopThread() (running on
+	// start_stop_thread) nulls them out on teardown/reconnect with the
+	// same lock held, and Data() runs on an OBS encoder thread. Without
+	// this, a concurrent reset here could race the reset there - not
+	// just a stale-pointer read, but a data race on the shared_ptr
+	// control block itself, which corrupts memory. Root-caused an OBS
+	// crash/hang after ~11h of overnight streaming (RTC worker thread
+	// SEH exception, then eventual process hang).
+	std::shared_ptr<rtc::Track> local_audio_track;
+	std::shared_ptr<rtc::Track> local_video_track;
+	std::shared_ptr<rtc::DataChannel> local_timestamp_channel;
+	std::shared_ptr<rtc::RtcpSrReporter> local_audio_sr_reporter;
+	std::shared_ptr<rtc::RtcpSrReporter> local_video_sr_reporter;
+	{
+		std::lock_guard<std::mutex> lk(tracks_mutex);
+		local_audio_track = audio_track;
+		local_video_track = video_track;
+		local_timestamp_channel = timestamp_channel;
+		local_audio_sr_reporter = audio_sr_reporter;
+		local_video_sr_reporter = video_sr_reporter;
+	}
+
+	if (local_audio_track && packet->type == OBS_ENCODER_AUDIO) {
 		int64_t duration = packet->dts_usec - last_audio_timestamp;
-		Send(packet->data, packet->size, duration, audio_track, audio_sr_reporter);
+		Send(packet->data, packet->size, duration, local_audio_track, local_audio_sr_reporter);
 		last_audio_timestamp = packet->dts_usec;
-	} else if (video_track && packet->type == OBS_ENCODER_VIDEO) {
-		auto rtp_config = video_sr_reporter->rtpConfig;
+	} else if (local_video_track && packet->type == OBS_ENCODER_VIDEO) {
+		auto rtp_config = local_video_sr_reporter->rtpConfig;
 		auto videoLayerState = videoLayerStates[packet->encoder];
 		if (videoLayerState == nullptr) {
 			// Stale encoder packet in flight after reconnect:
@@ -189,20 +212,20 @@ void WHIPOutput::Data(struct encoder_packet *packet)
 		// frame_no is the starting RTP sequence number for this frame's
 		// first packet (it wraps at 65536 same as the RTP field itself).
 		// See docs/obs-abs-timestamp-protocol.md.
-		if (timestamp_channel && timestamp_channel->isOpen()) {
+		if (local_timestamp_channel && local_timestamp_channel->isOpen()) {
 			nlohmann::json ts_msg = {
 				{"frame_no", videoLayerState->sequenceNumber},
 				{"timestamp", ntp_clock_now_ms()},
 				{"rid", videoLayerState->rid},
 			};
 			try {
-				timestamp_channel->send(ts_msg.dump());
+				local_timestamp_channel->send(ts_msg.dump());
 			} catch (const std::exception &e) {
 				do_log(LOG_DEBUG, "timestamp_channel send failed: %s", e.what());
 			}
 		}
 
-		Send(packet->data, packet->size, duration, video_track, video_sr_reporter);
+		Send(packet->data, packet->size, duration, local_video_track, local_video_sr_reporter);
 
 		videoLayerState->sequenceNumber = rtp_config->sequenceNumber;
 		videoLayerState->lastVideoTimestamp = packet->dts_usec;
@@ -224,17 +247,21 @@ void WHIPOutput::ConfigureAudioTrack(std::string media_stream_id, std::string cn
 	rtc::Description::Audio audio_description(audio_mid, rtc::Description::Direction::SendOnly);
 	audio_description.addOpusCodec(audio_payload_type);
 	audio_description.addSSRC(ssrc, cname, media_stream_id, media_stream_track_id);
-	audio_track = peer_connection->addTrack(audio_description);
+	auto new_audio_track = peer_connection->addTrack(audio_description);
 
 	auto rtp_config = std::make_shared<rtc::RtpPacketizationConfig>(ssrc, cname, audio_payload_type,
 									rtc::OpusRtpPacketizer::DefaultClockRate);
 	auto packetizer = std::make_shared<rtc::OpusRtpPacketizer>(rtp_config);
-	audio_sr_reporter = std::make_shared<rtc::RtcpSrReporter>(rtp_config);
+	auto new_audio_sr_reporter = std::make_shared<rtc::RtcpSrReporter>(rtp_config);
 	auto nack_responder = std::make_shared<rtc::RtcpNackResponder>();
 
-	packetizer->addToChain(audio_sr_reporter);
+	packetizer->addToChain(new_audio_sr_reporter);
 	packetizer->addToChain(nack_responder);
-	audio_track->setMediaHandler(packetizer);
+	new_audio_track->setMediaHandler(packetizer);
+
+	std::lock_guard<std::mutex> lk(tracks_mutex);
+	audio_track = new_audio_track;
+	audio_sr_reporter = new_audio_sr_reporter;
 }
 
 void WHIPOutput::ConfigureVideoTrack(std::string media_stream_id, std::string cname)
@@ -309,8 +336,8 @@ void WHIPOutput::ConfigureVideoTrack(std::string media_stream_id, std::string cn
 		return;
 	}
 
-	video_sr_reporter = std::make_shared<rtc::RtcpSrReporter>(rtp_config);
-	packetizer->addToChain(video_sr_reporter);
+	auto new_video_sr_reporter = std::make_shared<rtc::RtcpSrReporter>(rtp_config);
+	packetizer->addToChain(new_video_sr_reporter);
 	packetizer->addToChain(std::make_shared<rtc::RtcpNackResponder>(video_nack_buffer_size));
 
 	if (video_bitrate != 0) {
@@ -318,8 +345,12 @@ void WHIPOutput::ConfigureVideoTrack(std::string media_stream_id, std::string cn
 									    std::chrono::milliseconds(5)));
 	}
 
-	video_track = peer_connection->addTrack(video_description);
-	video_track->setMediaHandler(packetizer);
+	auto new_video_track = peer_connection->addTrack(video_description);
+	new_video_track->setMediaHandler(packetizer);
+
+	std::lock_guard<std::mutex> lk(tracks_mutex);
+	video_track = new_video_track;
+	video_sr_reporter = new_video_sr_reporter;
 }
 
 /**
@@ -452,7 +483,11 @@ bool WHIPOutput::Setup(uint64_t generation)
 	// timestamp_channel never reports isOpen(). Must be created AFTER
 	// addTrack (Configure*Track) calls so libdatachannel includes
 	// both the DataChannel and the media m-lines in the SDP offer.
-	timestamp_channel = peer_connection->createDataChannel("obs-timestamp");
+	auto new_timestamp_channel = peer_connection->createDataChannel("obs-timestamp");
+	{
+		std::lock_guard<std::mutex> lk(tracks_mutex);
+		timestamp_channel = new_timestamp_channel;
+	}
 
 	peer_connection->setLocalDescription();
 
@@ -733,9 +768,12 @@ void WHIPOutput::StartThread(uint64_t generation)
 		MarkDisconnected();
 		peer_connection->close();
 		peer_connection = nullptr;
-		audio_track = nullptr;
-		video_track = nullptr;
-		timestamp_channel = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(tracks_mutex);
+			audio_track = nullptr;
+			video_track = nullptr;
+			timestamp_channel = nullptr;
+		}
 		return;
 	}
 
@@ -745,9 +783,12 @@ void WHIPOutput::StartThread(uint64_t generation)
 		if (peer_connection)
 			peer_connection->close();
 		peer_connection = nullptr;
-		audio_track = nullptr;
-		video_track = nullptr;
-		timestamp_channel = nullptr;
+		{
+			std::lock_guard<std::mutex> lk(tracks_mutex);
+			audio_track = nullptr;
+			video_track = nullptr;
+			timestamp_channel = nullptr;
+		}
 		SendDelete(attemptResourceURL, generation, "stale_generation_after_connect");
 		return;
 	}
@@ -829,6 +870,7 @@ void WHIPOutput::StopThread(bool signal, uint64_t generation, std::string resour
 	if (peer_connection != nullptr) {
 		peer_connection->close();
 		peer_connection = nullptr;
+		std::lock_guard<std::mutex> lk(tracks_mutex);
 		audio_track = nullptr;
 		video_track = nullptr;
 		timestamp_channel = nullptr;

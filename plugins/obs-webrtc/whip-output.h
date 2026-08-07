@@ -69,6 +69,18 @@ private:
 	std::mutex resource_mutex;
 	std::thread start_stop_thread;
 
+	// Guards peer_connection/audio_track/video_track/timestamp_channel
+	// (and the SR reporters, which are only ever read/written alongside
+	// the track they belong to). Data() runs on an OBS encoder thread
+	// and reads these; StartThread()/StopThread() run on start_stop_thread
+	// and null them out on teardown. Without this lock, Data() can read a
+	// shared_ptr while it's concurrently being reset elsewhere - a data
+	// race on the shared_ptr control block, not just a stale-pointer
+	// issue, that corrupts memory rather than just crashing outright.
+	// Root-caused a hung/crashed OBS process after ~11h of overnight
+	// streaming (RTC worker thread SEH exception, then eventual hang).
+	std::mutex tracks_mutex;
+
 	uint32_t base_ssrc;
 	std::shared_ptr<rtc::PeerConnection> peer_connection;
 	std::shared_ptr<rtc::Track> audio_track;
