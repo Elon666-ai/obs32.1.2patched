@@ -31,6 +31,46 @@ static size_t extract_buffer_from_sei(sei_t *sei, uint8_t **data_out)
 	return payload_size;
 }
 
+/* Returns the offset (from the start of the buffer, i.e. including its
+ * leading annex-B start code) of the first VCL NAL (slice, type 1/5) in an
+ * AVC access unit, or SIZE_MAX if none is found. AVC has no "suffix SEI"
+ * concept (unlike HEVC) - a SEI NAL must precede the VCL NALs it applies
+ * to within the access unit (after AUD/SPS/PPS is fine, but never after
+ * the slice data). Appending it at the end instead produces a bitstream
+ * that decoders reject or refuse to associate the SEI with the frame
+ * ("Late SEI is not implemented" in ffmpeg) - this broke Tencent Cloud's
+ * H264 decoding of streams forwarded there by mmx, even though the
+ * SEI-carrying bitstream played fine locally (browsers/players that
+ * re-parse NALs per frame rather than requiring strict SEI-before-VCL
+ * ordering tolerate it).
+ */
+static size_t avc_find_first_vcl_offset(const uint8_t *data, size_t size)
+{
+	size_t i = 0;
+
+	while (i + 4 <= size) {
+		bool has4 = memcmp(data + i, nal_start, 4) == 0;
+		bool has3 = !has4 && memcmp(data + i, nal_start + 1, 3) == 0;
+		if (!has4 && !has3) {
+			i++;
+			continue;
+		}
+
+		size_t hdr_len = has4 ? 4 : 3;
+		size_t nal_type_pos = i + hdr_len;
+		if (nal_type_pos >= size)
+			break;
+
+		uint8_t nal_type = data[nal_type_pos] & 0x1F;
+		if (nal_type == 1 || nal_type == 5)
+			return i;
+
+		i = nal_type_pos;
+	}
+
+	return SIZE_MAX;
+}
+
 void abs_ts_sei_inject(obs_output_t *output, struct encoder_packet *pkt, struct encoder_packet_time *pkt_time,
 		       void *param)
 {
@@ -70,12 +110,18 @@ void abs_ts_sei_inject(obs_output_t *output, struct encoder_packet *pkt, struct 
 		hevc_nal_header[1] = pkt->data[nal_header_index_start + 1];
 	}
 
+	size_t avc_vcl_offset = SIZE_MAX;
+	if (avc) {
+		avc_vcl_offset = avc_find_first_vcl_offset(pkt->data, pkt->size);
+		if (avc_vcl_offset == SIZE_MAX)
+			return; /* no VCL NAL found, nothing to annotate */
+	}
+
 	struct encoder_packet backup = *pkt;
 	long ref = 1;
 	DARRAY(uint8_t) out_data;
 	da_init(out_data);
 	da_push_back_array(out_data, (uint8_t *)&ref, sizeof(ref));
-	da_push_back_array(out_data, pkt->data, pkt->size);
 
 	sei_t sei;
 	sei_init(&sei, 0.0);
@@ -91,11 +137,16 @@ void abs_ts_sei_inject(obs_output_t *output, struct encoder_packet *pkt, struct 
 	}
 
 	if (avc) {
-		/* Appended after the frame's existing NALs, consistent with
-		 * how captions/BPM already do this in this codebase. */
+		/* Insert before the first VCL NAL (after any AUD/SPS/PPS),
+		 * since AVC has no suffix-SEI concept - see
+		 * avc_find_first_vcl_offset() for why appending at the end
+		 * (as this used to do) breaks strict decoders. */
+		da_push_back_array(out_data, pkt->data, avc_vcl_offset);
 		da_push_back_array(out_data, nal_start, 4);
 		da_push_back_array(out_data, data, size);
+		da_push_back_array(out_data, pkt->data + avc_vcl_offset, pkt->size - avc_vcl_offset);
 	} else if (hevc) {
+		da_push_back_array(out_data, pkt->data, pkt->size);
 		/* Suffix SEI (NAL type 40): explicitly meant to follow the
 		 * VCL NALs it applies to, so appending here is spec-correct
 		 * for HEVC (unlike AVC, which has no suffix/prefix concept). */
@@ -107,6 +158,7 @@ void abs_ts_sei_inject(obs_output_t *output, struct encoder_packet *pkt, struct 
 		da_push_back_array(out_data, hevc_nal_header, 2);
 		da_push_back_array(out_data, &data[1], size - 1);
 	} else if (av1) {
+		da_push_back_array(out_data, pkt->data, pkt->size);
 		uint8_t *sei_payload = NULL;
 		size_t sei_payload_size = extract_buffer_from_sei(&sei, &sei_payload);
 		uint8_t *obu_buffer = NULL;
