@@ -740,6 +740,19 @@ bool AdvancedOutput::StartStreaming(obs_service_t *service)
 	if (is_rtmp) {
 		SetupVodTrack(service);
 	}
+
+	// Video encoder initialization below (obs_output_start ->
+	// obs_output_initialize_encoders) synchronously opens GPU-backed encoder
+	// sessions (e.g. QSV texture-sharing encoders sharing a single D3D11
+	// device across the main encoder and all WHIP simulcast layers). If a
+	// video settings change (resolution, simulcast layer count, etc.) was
+	// just applied, the graphics thread may still have pending work from
+	// that change queued up. obs_queue_task with wait=true blocks until an
+	// empty task has run on the graphics thread, so encoder creation always
+	// starts from a settled GPU/graphics state instead of racing it.
+	obs_queue_task(
+		OBS_TASK_GRAPHICS, [](void *) {}, nullptr, true);
+
 	if (obs_output_start(streamOutput)) {
 		if (multitrackVideo && multitrackVideoActive)
 			multitrackVideo->StartedStreaming();
