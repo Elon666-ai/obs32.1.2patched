@@ -729,6 +729,14 @@ bool SimpleOutput::StartStreaming(obs_service_t *service)
 	if (!multitrackVideo || !multitrackVideoActive)
 		SetupVodTrack(service);
 
+	// See AdvancedOutput::StartStreaming for why this is here: encoder
+	// initialization below can synchronously open GPU-backed encoder
+	// sessions (e.g. QSV texture-sharing encoders), and we want that to
+	// start from a settled graphics state rather than racing a just-applied
+	// video settings change.
+	obs_queue_task(
+		OBS_TASK_GRAPHICS, [](void *) {}, nullptr, true);
+
 	if (obs_output_start(streamOutput)) {
 		if (multitrackVideo && multitrackVideoActive)
 			multitrackVideo->StartedStreaming();
