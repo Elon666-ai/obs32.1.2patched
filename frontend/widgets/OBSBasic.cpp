@@ -1060,6 +1060,7 @@ void OBSBasic::OBSInit()
 
 	ResetOutputs();
 	CreateHotkeys();
+	InitSchedule();
 
 	InitPrimitives();
 

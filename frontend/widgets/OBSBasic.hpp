@@ -1394,6 +1394,24 @@ signals:
 	void StreamingStopped(bool withDelay = false);
 
 	/* -------------------------------------
+	 * MARK: - OBSBasic_Schedule
+	 * -------------------------------------
+	 */
+private:
+	QPointer<QTimer> scheduleTimer;
+	bool scheduleStreamActive = false;
+
+	void InitSchedule();
+	void CheckSchedule();
+	bool ScheduleEnabled() const;
+
+public slots:
+	void ReloadSchedule();
+
+signals:
+	void ScheduleEnabledChanged(bool enabled);
+
+	/* -------------------------------------
 	 * MARK: - OBSBasic_StudioMode
 	 * -------------------------------------
 	 */

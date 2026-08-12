@@ -31,6 +31,7 @@ target_sources(
     widgets/OBSBasic_Projectors.cpp
     widgets/OBSBasic_Recording.cpp
     widgets/OBSBasic_ReplayBuffer.cpp
+    widgets/OBSBasic_Schedule.cpp
     widgets/OBSBasic_SceneCollections.cpp
     widgets/OBSBasic_SceneItems.cpp
     widgets/OBSBasic_Scenes.cpp

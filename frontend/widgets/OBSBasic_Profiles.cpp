@@ -707,6 +707,7 @@ void OBSBasic::ActivateProfile(const OBSProfile &profile, bool reset)
 
 	UpdateTitleBar();
 	emit profileSettingChanged("Audio", "MeterDecayRate");
+	ReloadSchedule();
 
 	Auth::Load();
 #ifdef YOUTUBE_ENABLED

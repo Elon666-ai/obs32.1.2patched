@@ -140,16 +140,18 @@ void OBSBasic::CreateHotkeys()
 	streamingHotkeys = obs_hotkey_pair_register_frontend(
 		"OBSBasic.StartStreaming", Str("Basic.Main.StartStreaming"), "OBSBasic.StopStreaming",
 		Str("Basic.Main.StopStreaming"),
-		MAKE_CALLBACK(!basic.outputHandler->StreamingActive() && !basic.streamingStarting, basic.StartStreaming,
-			      "Starting stream"),
-		MAKE_CALLBACK(basic.outputHandler->StreamingActive() && !basic.streamingStarting, basic.StopStreaming,
-			      "Stopping stream"),
+		MAKE_CALLBACK(!basic.ScheduleEnabled() && !basic.outputHandler->StreamingActive() &&
+				      !basic.streamingStarting,
+			      basic.StartStreaming, "Starting stream"),
+		MAKE_CALLBACK(!basic.ScheduleEnabled() && basic.outputHandler->StreamingActive() &&
+				      !basic.streamingStarting,
+			      basic.StopStreaming, "Stopping stream"),
 		this, this);
 	LoadHotkeyPair(streamingHotkeys, "OBSBasic.StartStreaming", "OBSBasic.StopStreaming");
 
 	auto cb = [](void *data, obs_hotkey_id, obs_hotkey_t *, bool pressed) {
 		OBSBasic &basic = *static_cast<OBSBasic *>(data);
-		if (basic.outputHandler->StreamingActive() && pressed) {
+		if (!basic.ScheduleEnabled() && basic.outputHandler->StreamingActive() && pressed) {
 			basic.ForceStopStreaming();
 		}
 	};

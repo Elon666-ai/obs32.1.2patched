@@ -23,6 +23,9 @@
 #include <utility/FFmpegShared.hpp>
 
 #include <QPointer>
+#include <QTimeEdit>
+
+#include <array>
 
 #define VOLUME_METER_DECAY_FAST 23.53
 #define VOLUME_METER_DECAY_MEDIUM 11.76
@@ -48,8 +51,21 @@ class OBSBasicSettings : public QDialog {
 	Q_PROPERTY(QIcon hotkeysIcon READ GetHotkeysIcon WRITE SetHotkeysIcon DESIGNABLE true)
 	Q_PROPERTY(QIcon accessibilityIcon READ GetAccessibilityIcon WRITE SetAccessibilityIcon DESIGNABLE true)
 	Q_PROPERTY(QIcon advancedIcon READ GetAdvancedIcon WRITE SetAdvancedIcon DESIGNABLE true)
+	Q_PROPERTY(QIcon scheduleIcon READ GetScheduleIcon WRITE SetScheduleIcon DESIGNABLE true)
 
-	enum Pages { GENERAL, APPEARANCE, STREAM, OUTPUT, AUDIO, VIDEO, HOTKEYS, ACCESSIBILITY, ADVANCED, NUM_PAGES };
+	enum Pages {
+		GENERAL,
+		APPEARANCE,
+		STREAM,
+		OUTPUT,
+		AUDIO,
+		VIDEO,
+		HOTKEYS,
+		ACCESSIBILITY,
+		ADVANCED,
+		SCHEDULE,
+		NUM_PAGES
+	};
 
 private:
 	OBSBasic *main;
@@ -67,6 +83,7 @@ private:
 	bool a11yChanged = false;
 	bool appearanceChanged = false;
 	bool advancedChanged = false;
+	bool scheduleChanged = false;
 	int pageIndex = 0;
 	bool loading = true;
 	bool forceAuthReload = false;
@@ -144,7 +161,7 @@ private:
 	inline bool Changed() const
 	{
 		return generalChanged || appearanceChanged || outputsChanged || stream1Changed || audioChanged ||
-		       videoChanged || advancedChanged || hotkeysChanged || a11yChanged;
+		       videoChanged || advancedChanged || hotkeysChanged || a11yChanged || scheduleChanged;
 	}
 
 	inline void EnableApplyButton(bool en) { ui->buttonBox->button(QDialogButtonBox::Apply)->setEnabled(en); }
@@ -160,6 +177,7 @@ private:
 		a11yChanged = false;
 		advancedChanged = false;
 		appearanceChanged = false;
+		scheduleChanged = false;
 		EnableApplyButton(false);
 	}
 
@@ -192,6 +210,7 @@ private:
 	void LoadA11ySettings(bool presetChange = false);
 	void LoadAppearanceSettings(bool reload = false);
 	void LoadAdvancedSettings();
+	void LoadScheduleSettings();
 	void LoadSettings(bool changedOnly);
 
 	OBSPropertiesView *CreateEncoderPropertyView(const char *encoder, const char *path, bool changed = false);
@@ -229,6 +248,16 @@ private:
 	void enableAppearanceDensityControls(bool enable);
 
 	bool IsCustomServer();
+
+	/* schedule */
+	struct ScheduleDayRow {
+		QPointer<QCheckBox> enabled;
+		QPointer<QTimeEdit> start;
+		QPointer<QTimeEdit> end;
+	};
+	QPointer<QGroupBox> scheduleGroupBox;
+	std::array<ScheduleDayRow, 7> scheduleDays;
+	void InitSchedulePage();
 
 private slots:
 	void UpdateMultitrackVideo();
@@ -295,6 +324,7 @@ private:
 	void SaveA11ySettings();
 	void SaveAppearanceSettings();
 	void SaveAdvancedSettings();
+	void SaveScheduleSettings();
 	void SaveSettings();
 
 	void SearchHotkeys(const QString &text, obs_key_combination_t filterCombo);
@@ -320,6 +350,7 @@ private:
 	QIcon hotkeysIcon;
 	QIcon accessibilityIcon;
 	QIcon advancedIcon;
+	QIcon scheduleIcon;
 
 	QIcon GetGeneralIcon() const;
 	QIcon GetAppearanceIcon() const;
@@ -330,6 +361,7 @@ private:
 	QIcon GetHotkeysIcon() const;
 	QIcon GetAccessibilityIcon() const;
 	QIcon GetAdvancedIcon() const;
+	QIcon GetScheduleIcon() const;
 
 	int CurrentFLVTrack();
 	int SimpleOutGetSelectedAudioTracks();
@@ -411,6 +443,7 @@ private slots:
 	void AppearanceChanged();
 	void AdvancedChanged();
 	void AdvancedChangedRestart();
+	void ScheduleChanged();
 
 	void UpdateStreamDelayEstimate();
 
@@ -440,6 +473,7 @@ private slots:
 	void SetHotkeysIcon(const QIcon &icon);
 	void SetAccessibilityIcon(const QIcon &icon);
 	void SetAdvancedIcon(const QIcon &icon);
+	void SetScheduleIcon(const QIcon &icon);
 
 	void UseStreamKeyAdvClicked();
 

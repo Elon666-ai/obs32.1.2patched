@@ -95,6 +95,8 @@ OBSBasicControls::OBSBasicControls(OBSBasic *main) : QFrame(nullptr), ui(new Ui:
 	connect(main, &OBSBasic::BroadcastFlowEnabled, this, &OBSBasicControls::EnableBroadcastFlow);
 	connect(main, &OBSBasic::ReplayBufEnabled, this, &OBSBasicControls::EnableReplayBufferButtons);
 	connect(main, &OBSBasic::VirtualCamEnabled, this, &OBSBasicControls::EnableVirtualCamButtons);
+
+	connect(main, &OBSBasic::ScheduleEnabledChanged, this, &OBSBasicControls::SetScheduleForceDisabled);
 }
 
 void OBSBasicControls::StreamingPreparing()
@@ -121,7 +123,7 @@ void OBSBasicControls::StreamingStarting(bool broadcastAutoStart)
 
 void OBSBasicControls::StreamingStarted(bool withDelay)
 {
-	ui->streamButton->setEnabled(true);
+	ui->streamButton->setEnabled(!scheduleForceDisabled);
 	setClasses(ui->streamButton, "state-active");
 	ui->streamButton->setText(QTStr("Basic.Main.StopStreaming"));
 
@@ -139,7 +141,7 @@ void OBSBasicControls::StreamingStopping()
 
 void OBSBasicControls::StreamingStopped(bool withDelay)
 {
-	ui->streamButton->setEnabled(true);
+	ui->streamButton->setEnabled(!scheduleForceDisabled);
 	setClasses(ui->streamButton, "");
 	ui->streamButton->setText(QTStr("Basic.Main.StartStreaming"));
 
@@ -280,4 +282,11 @@ void OBSBasicControls::EnableVirtualCamButtons()
 {
 	ui->virtualCamButton->setVisible(true);
 	ui->virtualCamConfigButton->setVisible(true);
+}
+
+void OBSBasicControls::SetScheduleForceDisabled(bool disabled)
+{
+	scheduleForceDisabled = disabled;
+	ui->streamButton->setEnabled(!disabled);
+	ui->streamButton->setToolTip(disabled ? QTStr("Basic.Settings.Schedule.ManualControlDisabled") : QString());
 }
