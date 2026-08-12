@@ -1974,6 +1974,7 @@ OBSBasicSettings {
     qproperty-hotkeysIcon: url(theme:Dark/settings/hotkeys.svg);
     qproperty-accessibilityIcon: url(theme:Dark/settings/accessibility.svg);
     qproperty-advancedIcon: url(theme:Dark/settings/advanced.svg);
+    qproperty-scheduleIcon: url(theme:Dark/settings/advanced.svg);
 }
 
 /* Checkboxes */

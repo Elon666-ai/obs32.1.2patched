@@ -3,6 +3,7 @@ target_sources(
   PRIVATE
     settings/OBSBasicSettings_A11y.cpp
     settings/OBSBasicSettings_Appearance.cpp
+    settings/OBSBasicSettings_Schedule.cpp
     settings/OBSBasicSettings_Stream.cpp
     settings/OBSBasicSettings.cpp
     settings/OBSBasicSettings.hpp

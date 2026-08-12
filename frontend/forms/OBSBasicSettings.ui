@@ -141,6 +141,15 @@
           <normaloff>:/settings/images/settings/advanced.svg</normaloff>:/settings/images/settings/advanced.svg</iconset>
         </property>
        </item>
+       <item>
+        <property name="text">
+         <string>Basic.Settings.Schedule</string>
+        </property>
+        <property name="icon">
+         <iconset resource="obs.qrc">
+          <normaloff>:/settings/images/settings/advanced.svg</normaloff>:/settings/images/settings/advanced.svg</iconset>
+        </property>
+       </item>
       </widget>
      </item>
      <item>
@@ -8793,6 +8802,22 @@
            </layout>
           </widget>
          </item>
+        </layout>
+       </widget>
+       <widget class="QWidget" name="schedulePage">
+        <layout class="QVBoxLayout" name="scheduleLayout">
+         <property name="leftMargin">
+          <number>9</number>
+         </property>
+         <property name="topMargin">
+          <number>0</number>
+         </property>
+         <property name="rightMargin">
+          <number>0</number>
+         </property>
+         <property name="bottomMargin">
+          <number>0</number>
+         </property>
         </layout>
        </widget>
       </widget>

@@ -372,6 +372,12 @@ void OBSBasic::StreamingStop(int code, QString last_error)
 
 void OBSBasic::StreamActionTriggered()
 {
+	/* Manual streaming control (the main window button, its menu, hotkeys,
+	 * and the system tray item all funnel through here) is disallowed
+	 * while scheduled streaming is enabled - see docs on ScheduleEnabled(). */
+	if (ScheduleEnabled())
+		return;
+
 	if (outputHandler->StreamingActive()) {
 		bool confirm = config_get_bool(App()->GetUserConfig(), "BasicWindow", "WarnBeforeStoppingStream");
 

@@ -827,6 +827,7 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 
 	InitStreamPage();
 	InitAppearancePage();
+	InitSchedulePage();
 	LoadSettings(false);
 
 	ui->advOutTrack1->setAccessibleName(QTStr("Basic.Settings.Output.Adv.Audio.Track1"));
@@ -2928,6 +2929,8 @@ void OBSBasicSettings::LoadSettings(bool changedOnly)
 		LoadAppearanceSettings();
 	if (!changedOnly || advancedChanged)
 		LoadAdvancedSettings();
+	if (!changedOnly || scheduleChanged)
+		LoadScheduleSettings();
 }
 
 void OBSBasicSettings::SaveGeneralSettings()
@@ -3642,6 +3645,8 @@ void OBSBasicSettings::SaveSettings()
 		SaveAdvancedSettings();
 	if (appearanceChanged)
 		SaveAppearanceSettings();
+	if (scheduleChanged)
+		SaveScheduleSettings();
 	if (videoChanged || advancedChanged)
 		main->ResetVideo();
 
@@ -3669,6 +3674,8 @@ void OBSBasicSettings::SaveSettings()
 			AddChangedVal(changed, "appearance");
 		if (advancedChanged)
 			AddChangedVal(changed, "advanced");
+		if (scheduleChanged)
+			AddChangedVal(changed, "schedule");
 
 		blog(LOG_INFO, "Settings changed (%s)", changed.c_str());
 		blog(LOG_INFO, MINOR_SEPARATOR);
