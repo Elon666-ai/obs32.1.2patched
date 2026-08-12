@@ -164,7 +164,6 @@ OBSBasicSettings {
     qproperty-hotkeysIcon: url(:settings/images/settings/hotkeys.svg);
     qproperty-accessibilityIcon: url(:settings/images/settings/accessibility.svg);
     qproperty-advancedIcon: url(:settings/images/settings/advanced.svg);
-    qproperty-scheduleIcon: url(:settings/images/settings/advanced.svg);
 }
 
 OBSBasicSettings QListWidget::item {
