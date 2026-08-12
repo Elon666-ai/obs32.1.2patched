@@ -93,8 +93,6 @@ void OBSBasicSettings::InitSchedulePage()
 	auto *groupBoxLayout = qobject_cast<QVBoxLayout *>(ui->scheduleGroupBox->layout());
 	groupBoxLayout->addWidget(hintLabel);
 	groupBoxLayout->addLayout(gridLayout);
-
-	HookWidget(ui->scheduleGroupBox, &QGroupBox::toggled, &OBSBasicSettings::ScheduleChanged);
 }
 
 void OBSBasicSettings::LoadScheduleSettings()
@@ -102,9 +100,6 @@ void OBSBasicSettings::LoadScheduleSettings()
 	loading = true;
 
 	config_t *config = main->Config();
-
-	bool enabled = config_get_bool(config, "Schedule", "Enabled");
-	ui->scheduleGroupBox->setChecked(enabled);
 
 	for (size_t i = 0; i < scheduleDays.size(); i++) {
 		const ScheduleDayInfo &info = kScheduleDays[i];
@@ -134,11 +129,6 @@ void OBSBasicSettings::SaveScheduleSettings()
 {
 	config_t *config = main->Config();
 
-	bool wasEnabled = config_get_bool(config, "Schedule", "Enabled");
-	bool nowEnabled = ui->scheduleGroupBox->isChecked();
-
-	config_set_bool(config, "Schedule", "Enabled", nowEnabled);
-
 	for (size_t i = 0; i < scheduleDays.size(); i++) {
 		const ScheduleDayInfo &info = kScheduleDays[i];
 		ScheduleDayRow &row = scheduleDays[i];
@@ -160,14 +150,12 @@ void OBSBasicSettings::SaveScheduleSettings()
 		config_set_int(config, "Schedule", dayEndKey.c_str(), endMinutes);
 	}
 
-	/* Turning the schedule off must immediately stop any stream it's
-	 * currently keeping alive and hand manual control back - otherwise
-	 * the user unchecks the box, closes Settings, and the stream (and
-	 * the disabled manual button) is still stuck the way the schedule
-	 * left it until the next 5s poll happens to notice. */
-	if (wasEnabled && !nowEnabled)
-		main->StopScheduledStream();
-
+	/* Whether Scheduled Streaming itself is on/off ("Schedule"/"Enabled")
+	 * is no longer controlled from this page - see
+	 * OBSBasic::ScheduleButtonClicked() (control panel "Start/Stop
+	 * Scheduled Streaming" button). Day/time changes made here take
+	 * effect immediately for a schedule that's already running, via the
+	 * profileSettingChanged emit below. */
 	emit main->profileSettingChanged("Schedule", "SettingsChanged");
 }
 

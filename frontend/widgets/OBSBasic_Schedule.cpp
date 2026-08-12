@@ -111,16 +111,42 @@ void OBSBasic::CheckSchedule()
 
 void OBSBasic::StopScheduledStream()
 {
-	/* Called from OBSBasicSettings::SaveScheduleSettings() right after it
-	 * writes "Schedule"/"Enabled"=false to the same config_t that
-	 * activeConfiguration/Config() point at, so ScheduleEnabled() already
-	 * reads false by the time this runs. Manual control is restored
-	 * separately by the ScheduleEnabledChanged(false) emit that
-	 * ReloadSchedule() sends right after this (via profileSettingChanged). */
+	/* Called right after "Schedule"/"Enabled" has been written to false
+	 * on the same config_t that activeConfiguration/Config() point at,
+	 * so ScheduleEnabled() already reads false by the time this runs.
+	 * Manual control is restored separately by the
+	 * ScheduleEnabledChanged(false) emit that the caller sends right
+	 * after this (via profileSettingChanged, or directly from
+	 * ScheduleButtonClicked()). */
 	scheduleStreamActive = false;
 
 	if (outputHandler && outputHandler->StreamingActive() && !streamingStopping) {
 		blog(LOG_INFO, "Stopping stream: scheduled streaming was disabled");
 		StopStreaming();
 	}
+}
+
+void OBSBasic::ScheduleButtonClicked()
+{
+	/* Toggled from the "Start/Stop Scheduled Streaming" control panel
+	 * button (see OBSBasicControls). Starting it flips Schedule/Enabled
+	 * on and hands control over to CheckSchedule(), which then starts/
+	 * stops the stream on its own as the configured time windows (see
+	 * Settings > Stream > Scheduled Streaming Configuration) are entered
+	 * and left; the manual Start Streaming button gets disabled for as
+	 * long as this is on (see SetScheduleForceDisabled). Stopping it
+	 * immediately tears down any stream it's currently keeping alive and
+	 * hands manual control back, same as disabling it used to do from
+	 * Settings before that checkbox was replaced by this button. */
+	bool nowEnabled = !ScheduleEnabled();
+
+	config_set_bool(activeConfiguration, "Schedule", "Enabled", nowEnabled);
+
+	if (!nowEnabled)
+		StopScheduledStream();
+
+	emit ScheduleEnabledChanged(nowEnabled);
+	CheckSchedule();
+
+	activeConfiguration.SaveSafe("tmp");
 }

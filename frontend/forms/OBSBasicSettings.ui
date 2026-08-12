@@ -2186,6 +2186,28 @@
                    </item>
                   </layout>
                  </item>
+                 <item>
+                  <!-- Per-layer resolution/bitrate rows are built at
+                       runtime by OBSBasicSettings::RebuildWHIPSimulcastLayerRows()
+                       (see OBSBasicSettings_Stream.cpp), one row per layer
+                       beyond the first - this container just holds them. -->
+                  <widget class="QWidget" name="whipSimulcastLayersContainer" native="true">
+                   <layout class="QVBoxLayout" name="whipSimulcastLayersContainerLayout">
+                    <property name="leftMargin">
+                     <number>0</number>
+                    </property>
+                    <property name="topMargin">
+                     <number>0</number>
+                    </property>
+                    <property name="rightMargin">
+                     <number>0</number>
+                    </property>
+                    <property name="bottomMargin">
+                     <number>0</number>
+                    </property>
+                   </layout>
+                  </widget>
+                 </item>
                 </layout>
                </widget>
                </item>
@@ -2272,13 +2294,7 @@
               <item>
                <widget class="QGroupBox" name="scheduleGroupBox">
                 <property name="title">
-                 <string>Basic.Settings.Schedule.Enable</string>
-                </property>
-                <property name="checkable">
-                 <bool>true</bool>
-                </property>
-                <property name="checked">
-                 <bool>false</bool>
+                 <string>Basic.Settings.Schedule.GroupTitle</string>
                 </property>
                 <layout class="QVBoxLayout" name="scheduleGroupBoxLayout">
                  <property name="leftMargin">

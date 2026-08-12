@@ -19,6 +19,9 @@ OBSBasicControls::OBSBasicControls(OBSBasic *main) : QFrame(nullptr), ui(new Ui:
 		ui->streamButton, &QPushButton::clicked, this, [this]() { emit this->StreamButtonClicked(); },
 		Qt::DirectConnection);
 	connect(
+		ui->scheduleButton, &QPushButton::clicked, this, [this]() { emit this->ScheduleButtonClicked(); },
+		Qt::DirectConnection);
+	connect(
 		ui->broadcastButton, &QPushButton::clicked, this, [this]() { emit this->BroadcastButtonClicked(); },
 		Qt::DirectConnection);
 	connect(
@@ -97,6 +100,7 @@ OBSBasicControls::OBSBasicControls(OBSBasic *main) : QFrame(nullptr), ui(new Ui:
 	connect(main, &OBSBasic::VirtualCamEnabled, this, &OBSBasicControls::EnableVirtualCamButtons);
 
 	connect(main, &OBSBasic::ScheduleEnabledChanged, this, &OBSBasicControls::SetScheduleForceDisabled);
+	connect(main, &OBSBasic::ScheduleEnabledChanged, this, &OBSBasicControls::SetScheduleActive);
 }
 
 void OBSBasicControls::StreamingPreparing()
@@ -289,4 +293,10 @@ void OBSBasicControls::SetScheduleForceDisabled(bool disabled)
 	scheduleForceDisabled = disabled;
 	ui->streamButton->setEnabled(!disabled);
 	ui->streamButton->setToolTip(disabled ? QTStr("Basic.Settings.Schedule.ManualControlDisabled") : QString());
+}
+
+void OBSBasicControls::SetScheduleActive(bool active)
+{
+	setClasses(ui->scheduleButton, active ? "state-active" : "");
+	ui->scheduleButton->setText(QTStr(active ? "Basic.Main.StopSchedule" : "Basic.Main.StartSchedule"));
 }

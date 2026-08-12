@@ -1410,6 +1410,7 @@ public:
 
 public slots:
 	void ReloadSchedule();
+	void ScheduleButtonClicked();
 
 signals:
 	void ScheduleEnabledChanged(bool enabled);

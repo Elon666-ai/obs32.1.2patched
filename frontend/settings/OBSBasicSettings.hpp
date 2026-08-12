@@ -220,6 +220,32 @@ private:
 	int prevLangIndex;
 	bool prevBrowserAccel;
 
+	/* WHIP Simulcast per-layer resolution/bitrate settings (Settings >
+	 * Stream, below the "Total Layers" spinbox - see
+	 * WHIPSimulcastEncoders.hpp for how these are consumed). One row of
+	 * (follow-main checkbox, width, height, bitrate) widgets per layer
+	 * beyond the first (layer 0 is always the main Stream encoder's own
+	 * output - see RebuildWHIPSimulcastLayerRows), rebuilt whenever
+	 * whipSimulcastTotalLayers changes.
+	 *
+	 * followMain, when checked (the default), keeps width/height
+	 * disabled and live-recalculated from the main output's current
+	 * resolution any time this row is (re)built, rather than the old
+	 * behavior of freezing whatever resolution was on screen the first
+	 * time the row was saved - see RebuildWHIPSimulcastLayerRows and
+	 * WHIPSimulcastLayer::followMain in WHIPSimulcastEncoders.hpp.
+	 */
+	struct WHIPSimulcastLayerRow {
+		QWidget *rowWidget;
+		QCheckBox *followMain;
+		QSpinBox *width;
+		QSpinBox *height;
+		QSpinBox *bitrate;
+	};
+	std::vector<WHIPSimulcastLayerRow> whipSimulcastLayerRows;
+	void RebuildWHIPSimulcastLayerRows();
+	void WHIPSimulcastLayerFollowMainToggled(size_t layerIdx, bool checked);
+
 	void ServiceChanged(bool resetFields = false);
 	QString FindProtocol();
 	void UpdateServerList();
