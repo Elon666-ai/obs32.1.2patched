@@ -51,21 +51,8 @@ class OBSBasicSettings : public QDialog {
 	Q_PROPERTY(QIcon hotkeysIcon READ GetHotkeysIcon WRITE SetHotkeysIcon DESIGNABLE true)
 	Q_PROPERTY(QIcon accessibilityIcon READ GetAccessibilityIcon WRITE SetAccessibilityIcon DESIGNABLE true)
 	Q_PROPERTY(QIcon advancedIcon READ GetAdvancedIcon WRITE SetAdvancedIcon DESIGNABLE true)
-	Q_PROPERTY(QIcon scheduleIcon READ GetScheduleIcon WRITE SetScheduleIcon DESIGNABLE true)
 
-	enum Pages {
-		GENERAL,
-		APPEARANCE,
-		STREAM,
-		OUTPUT,
-		AUDIO,
-		VIDEO,
-		HOTKEYS,
-		ACCESSIBILITY,
-		ADVANCED,
-		SCHEDULE,
-		NUM_PAGES
-	};
+	enum Pages { GENERAL, APPEARANCE, STREAM, OUTPUT, AUDIO, VIDEO, HOTKEYS, ACCESSIBILITY, ADVANCED, NUM_PAGES };
 
 private:
 	OBSBasic *main;
@@ -249,13 +236,14 @@ private:
 
 	bool IsCustomServer();
 
-	/* schedule */
+	/* schedule (embedded in the stream page; ui->scheduleGroupBox is
+	 * defined in the .ui file itself, next to the "Advanced Options"
+	 * groupbox) */
 	struct ScheduleDayRow {
 		QPointer<QCheckBox> enabled;
 		QPointer<QTimeEdit> start;
 		QPointer<QTimeEdit> end;
 	};
-	QPointer<QGroupBox> scheduleGroupBox;
 	std::array<ScheduleDayRow, 7> scheduleDays;
 	void InitSchedulePage();
 
@@ -350,7 +338,6 @@ private:
 	QIcon hotkeysIcon;
 	QIcon accessibilityIcon;
 	QIcon advancedIcon;
-	QIcon scheduleIcon;
 
 	QIcon GetGeneralIcon() const;
 	QIcon GetAppearanceIcon() const;
@@ -361,7 +348,6 @@ private:
 	QIcon GetHotkeysIcon() const;
 	QIcon GetAccessibilityIcon() const;
 	QIcon GetAdvancedIcon() const;
-	QIcon GetScheduleIcon() const;
 
 	int CurrentFLVTrack();
 	int SimpleOutGetSelectedAudioTracks();
@@ -473,7 +459,6 @@ private slots:
 	void SetHotkeysIcon(const QIcon &icon);
 	void SetAccessibilityIcon(const QIcon &icon);
 	void SetAdvancedIcon(const QIcon &icon);
-	void SetScheduleIcon(const QIcon &icon);
 
 	void UseStreamKeyAdvClicked();
 

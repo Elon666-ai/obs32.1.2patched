@@ -1405,6 +1405,9 @@ private:
 	void CheckSchedule();
 	bool ScheduleEnabled() const;
 
+public:
+	void StopScheduledStream();
+
 public slots:
 	void ReloadSchedule();
 

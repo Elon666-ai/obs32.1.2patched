@@ -240,7 +240,6 @@ OBSBasicSettings {
     qproperty-hotkeysIcon: url(theme:Light/settings/hotkeys.svg);
     qproperty-accessibilityIcon: url(theme:Light/settings/accessibility.svg);
     qproperty-advancedIcon: url(theme:Light/settings/advanced.svg);
-    qproperty-scheduleIcon: url(theme:Light/settings/advanced.svg);
 }
 
 QCheckBox::indicator:unchecked,

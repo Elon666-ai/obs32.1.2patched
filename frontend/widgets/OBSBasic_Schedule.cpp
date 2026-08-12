@@ -26,10 +26,8 @@ namespace {
  * keys are written in by OBSBasicSettings_Schedule.cpp. */
 constexpr const char *kScheduleDayKeys[7] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
 
-/* How often the schedule is checked against the wall clock. A minute-level
- * schedule doesn't need finer granularity, and checking more often just
- * means more chances to trip over a stream start already in progress. */
-constexpr int kScheduleCheckIntervalMs = 15000;
+/* How often the schedule is checked against the wall clock. */
+constexpr int kScheduleCheckIntervalMs = 5000;
 
 } // namespace
 
@@ -107,6 +105,22 @@ void OBSBasic::CheckSchedule()
 		StartStreaming();
 	} else if (!shouldBeStreaming && active && !streamingStopping) {
 		blog(LOG_INFO, "Stopping stream due to schedule");
+		StopStreaming();
+	}
+}
+
+void OBSBasic::StopScheduledStream()
+{
+	/* Called from OBSBasicSettings::SaveScheduleSettings() right after it
+	 * writes "Schedule"/"Enabled"=false to the same config_t that
+	 * activeConfiguration/Config() point at, so ScheduleEnabled() already
+	 * reads false by the time this runs. Manual control is restored
+	 * separately by the ScheduleEnabledChanged(false) emit that
+	 * ReloadSchedule() sends right after this (via profileSettingChanged). */
+	scheduleStreamActive = false;
+
+	if (outputHandler && outputHandler->StreamingActive() && !streamingStopping) {
+		blog(LOG_INFO, "Stopping stream: scheduled streaming was disabled");
 		StopStreaming();
 	}
 }

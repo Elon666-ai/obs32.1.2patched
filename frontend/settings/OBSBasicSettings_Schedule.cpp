@@ -22,8 +22,8 @@
 #include <qt-wrappers.hpp>
 
 #include <QCheckBox>
-#include <QFormLayout>
-#include <QGroupBox>
+#include <QGridLayout>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QTimeEdit>
 #include <QVBoxLayout>
@@ -31,8 +31,9 @@
 namespace {
 
 /* Order matches Qt::DayOfWeek (Monday = 1 .. Sunday = 7), and is the order
- * rows are laid out top-to-bottom. Config key prefixes are stored in
- * English so profile files stay portable across UI languages. */
+ * rows are laid out (two days per row, left-to-right then top-to-bottom).
+ * Config key prefixes are stored in English so profile files stay portable
+ * across UI languages. */
 struct ScheduleDayInfo {
 	const char *configKey;
 	const char *localeKey;
@@ -45,19 +46,18 @@ constexpr ScheduleDayInfo kScheduleDays[7] = {
 	{"Sun", "Basic.Settings.Schedule.Sunday"},
 };
 
+/* Two days per row (Monday+Tuesday, Wednesday+Thursday, ...); the last row
+ * only has Sunday in the left column. */
+constexpr int kScheduleColumns = 2;
+
 } // namespace
 
 void OBSBasicSettings::InitSchedulePage()
 {
-	auto *pageLayout = qobject_cast<QVBoxLayout *>(ui->schedulePage->layout());
+	auto *hintLabel = new QLabel(QTStr("Basic.Settings.Schedule.Hint"));
+	hintLabel->setWordWrap(true);
 
-	scheduleGroupBox = new QGroupBox(QTStr("Basic.Settings.Schedule.Enable"));
-	scheduleGroupBox->setCheckable(true);
-	scheduleGroupBox->setChecked(false);
-
-	auto *formLayout = new QFormLayout();
-	formLayout->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
-	formLayout->setLabelAlignment(Qt::AlignRight | Qt::AlignTrailing | Qt::AlignVCenter);
+	auto *gridLayout = new QGridLayout();
 
 	for (size_t i = 0; i < scheduleDays.size(); i++) {
 		ScheduleDayRow &row = scheduleDays[i];
@@ -72,31 +72,29 @@ void OBSBasicSettings::InitSchedulePage()
 		row.end->setDisplayFormat("HH:mm");
 		row.end->setTime(QTime(18, 0));
 
-		auto *rowWidget = new QWidget();
-		auto *rowLayout = new QHBoxLayout(rowWidget);
-		rowLayout->setContentsMargins(0, 0, 0, 0);
-		rowLayout->addWidget(row.start);
-		rowLayout->addWidget(new QLabel(QTStr("Basic.Settings.Schedule.To")));
-		rowLayout->addWidget(row.end);
-		rowLayout->addStretch(1);
+		auto *dayWidget = new QWidget();
+		auto *dayLayout = new QHBoxLayout(dayWidget);
+		dayLayout->setContentsMargins(0, 0, 0, 0);
+		dayLayout->addWidget(row.enabled);
+		dayLayout->addWidget(row.start);
+		dayLayout->addWidget(new QLabel(QTStr("Basic.Settings.Schedule.To")));
+		dayLayout->addWidget(row.end);
+		dayLayout->addStretch(1);
 
-		formLayout->addRow(row.enabled, rowWidget);
+		int gridRow = (int)i / kScheduleColumns;
+		int gridColumn = (int)i % kScheduleColumns;
+		gridLayout->addWidget(dayWidget, gridRow, gridColumn);
 
 		HookWidget(row.enabled.data(), &QCheckBox::toggled, &OBSBasicSettings::ScheduleChanged);
 		HookWidget(row.start.data(), &QTimeEdit::userTimeChanged, &OBSBasicSettings::ScheduleChanged);
 		HookWidget(row.end.data(), &QTimeEdit::userTimeChanged, &OBSBasicSettings::ScheduleChanged);
 	}
 
-	scheduleGroupBox->setLayout(formLayout);
+	auto *groupBoxLayout = qobject_cast<QVBoxLayout *>(ui->scheduleGroupBox->layout());
+	groupBoxLayout->addWidget(hintLabel);
+	groupBoxLayout->addLayout(gridLayout);
 
-	auto *hintLabel = new QLabel(QTStr("Basic.Settings.Schedule.Hint"));
-	hintLabel->setWordWrap(true);
-
-	pageLayout->addWidget(hintLabel);
-	pageLayout->addWidget(scheduleGroupBox);
-	pageLayout->addStretch(1);
-
-	HookWidget(scheduleGroupBox.data(), &QGroupBox::toggled, &OBSBasicSettings::ScheduleChanged);
+	HookWidget(ui->scheduleGroupBox, &QGroupBox::toggled, &OBSBasicSettings::ScheduleChanged);
 }
 
 void OBSBasicSettings::LoadScheduleSettings()
@@ -106,7 +104,7 @@ void OBSBasicSettings::LoadScheduleSettings()
 	config_t *config = main->Config();
 
 	bool enabled = config_get_bool(config, "Schedule", "Enabled");
-	scheduleGroupBox->setChecked(enabled);
+	ui->scheduleGroupBox->setChecked(enabled);
 
 	for (size_t i = 0; i < scheduleDays.size(); i++) {
 		const ScheduleDayInfo &info = kScheduleDays[i];
@@ -136,7 +134,10 @@ void OBSBasicSettings::SaveScheduleSettings()
 {
 	config_t *config = main->Config();
 
-	config_set_bool(config, "Schedule", "Enabled", scheduleGroupBox->isChecked());
+	bool wasEnabled = config_get_bool(config, "Schedule", "Enabled");
+	bool nowEnabled = ui->scheduleGroupBox->isChecked();
+
+	config_set_bool(config, "Schedule", "Enabled", nowEnabled);
 
 	for (size_t i = 0; i < scheduleDays.size(); i++) {
 		const ScheduleDayInfo &info = kScheduleDays[i];
@@ -159,6 +160,14 @@ void OBSBasicSettings::SaveScheduleSettings()
 		config_set_int(config, "Schedule", dayEndKey.c_str(), endMinutes);
 	}
 
+	/* Turning the schedule off must immediately stop any stream it's
+	 * currently keeping alive and hand manual control back - otherwise
+	 * the user unchecks the box, closes Settings, and the stream (and
+	 * the disabled manual button) is still stuck the way the schedule
+	 * left it until the next 5s poll happens to notice. */
+	if (wasEnabled && !nowEnabled)
+		main->StopScheduledStream();
+
 	emit main->profileSettingChanged("Schedule", "SettingsChanged");
 }
 
@@ -169,14 +178,4 @@ void OBSBasicSettings::ScheduleChanged()
 		sender()->setProperty("changed", QVariant(true));
 		EnableApplyButton(true);
 	}
-}
-
-QIcon OBSBasicSettings::GetScheduleIcon() const
-{
-	return scheduleIcon;
-}
-
-void OBSBasicSettings::SetScheduleIcon(const QIcon &icon)
-{
-	ui->listWidget->item(Pages::SCHEDULE)->setIcon(icon);
 }
