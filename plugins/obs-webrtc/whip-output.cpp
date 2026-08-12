@@ -450,7 +450,22 @@ bool WHIPOutput::Setup(uint64_t generation)
 			do_log(LOG_INFO, "PeerConnection state is now: Failed");
 			MarkDisconnected();
 			Stop(false);
-			obs_output_signal_stop(output, OBS_OUTPUT_ERROR);
+			// OBS_OUTPUT_DISCONNECTED (not OBS_OUTPUT_ERROR) so
+			// libobs's own can_reconnect() treats this as a normal,
+			// reconnectable network drop: it silently retries via
+			// output_reconnect() instead of immediately ending data
+			// capture and popping the "connection failed" dialog in
+			// front of the user for something WHIP is already about
+			// to recover from on its own (see the grace-period retry
+			// this output does independently, and the Reconnect
+			// setting in Settings > Output, which is what actually
+			// gates whether libobs's reconnect kicks in here). If
+			// reconnection attempts are ever exhausted, libobs signals
+			// stop with this same code, and the resulting dialog text
+			// ("Disconnected from server") is more accurate for this
+			// case than the generic "unexpected error" text
+			// OBS_OUTPUT_ERROR would have shown anyway.
+			obs_output_signal_stop(output, OBS_OUTPUT_DISCONNECTED);
 			break;
 		case rtc::PeerConnection::State::Closed:
 			do_log(LOG_INFO, "PeerConnection state is now: Closed");

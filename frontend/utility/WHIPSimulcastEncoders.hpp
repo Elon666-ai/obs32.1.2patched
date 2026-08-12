@@ -16,10 +16,75 @@
 ******************************************************************************/
 #pragma once
 
+#include <string>
+
+// One scaled-down Simulcast layer's target resolution/bitrate, as
+// configured by the user in Settings > Stream > Simulcast (see
+// OBSBasicSettings::RebuildWHIPSimulcastLayerRows in
+// OBSBasicSettings_Stream.cpp, which builds those per-layer fields and
+// saves them under the config keys read here). rid=0 (the highest layer)
+// is never covered by this - it's always the main Stream encoder's own,
+// unscaled output.
+struct WHIPSimulcastLayer {
+	// If true, width/height below are meaningless - the caller should
+	// use its own halve-per-slot resolution formula against the main
+	// output's *current* resolution instead, so this layer stays in
+	// proportion to layer 0 even after layer 0's resolution changes
+	// (see the "WHIPSimulcastLayer<N>FollowMain" config key, which
+	// defaults to true when absent - see the Update()/Create() call
+	// sites below for why absence must mean "follow").
+	bool followMain;
+	uint32_t width;
+	uint32_t height;
+	int bitrateKbps;
+};
+
+// Reads layer N's (N = 1, 2, ...; rid=0 excluded, see WHIPSimulcastLayer's
+// comment) saved resolution/bitrate from config's "Stream1" section, using
+// the same "WHIPSimulcastLayer<N>Width/Height/BitrateKbps" keys
+// OBSBasicSettings_Stream.cpp's SaveStream1Settings() writes. Returns
+// false if config has no user-saved bitrate value for that layer yet
+// (e.g. this row was never touched, or config predates this per-layer
+// UI), leaving *layer unmodified so the caller can fall back to the
+// halve-per-slot formula for it entirely (both resolution and bitrate).
+static inline bool GetWHIPSimulcastLayerConfig(config_t *config, int layerNum, WHIPSimulcastLayer *layer)
+{
+	std::string prefix = "WHIPSimulcastLayer" + std::to_string(layerNum);
+	std::string widthKey = prefix + "Width";
+	std::string heightKey = prefix + "Height";
+	std::string bitrateKey = prefix + "BitrateKbps";
+	std::string followMainKey = prefix + "FollowMain";
+
+	if (!config || !config_has_user_value(config, "Stream1", bitrateKey.c_str()))
+		return false;
+
+	// Absence of a saved FollowMain value means either a config from
+	// before this option existed, or a row that's never been unchecked
+	// - both should keep following the main output's resolution.
+	layer->followMain = !config_has_user_value(config, "Stream1", followMainKey.c_str()) ||
+			    config_get_bool(config, "Stream1", followMainKey.c_str());
+	layer->width = static_cast<uint32_t>(config_get_int(config, "Stream1", widthKey.c_str()));
+	layer->height = static_cast<uint32_t>(config_get_int(config, "Stream1", heightKey.c_str()));
+	layer->bitrateKbps = static_cast<int>(config_get_int(config, "Stream1", bitrateKey.c_str()));
+
+	if (layer->bitrateKbps <= 0)
+		return false;
+	if (!layer->followMain && (layer->width == 0 || layer->height == 0))
+		return false;
+	return true;
+}
+
 struct WHIPSimulcastEncoders {
 public:
+	// config is main->Config() (see AdvancedOutput.cpp/SimpleOutput.cpp
+	// call sites) - read here rather than threaded through as
+	// individual values so each layer can independently fall back to
+	// the halve-per-slot formula if it has no saved config value (a mix
+	// of user-customized and default layers is expected, e.g. right
+	// after the user increases Total Layers and hasn't touched the new
+	// row yet).
 	void Create(const char *encoderId, obs_data_t *videoSettings, int rescaleFilter, int whipSimulcastTotalLayers,
-		    uint32_t outputWidth, uint32_t outputHeight)
+		    uint32_t outputWidth, uint32_t outputHeight, config_t *config = nullptr)
 	{
 		if (rescaleFilter == OBS_SCALE_DISABLE) {
 			rescaleFilter = OBS_SCALE_BICUBIC;
@@ -29,25 +94,58 @@ public:
 			return;
 		}
 
+		usingCustomLayer.assign(whipSimulcastTotalLayers, false);
+
 		auto widthStep = outputWidth / whipSimulcastTotalLayers;
 		auto heightStep = outputHeight / whipSimulcastTotalLayers;
 		int videoBitrate = videoSettings ? static_cast<int>(obs_data_get_int(videoSettings, "bitrate")) : 0;
-		auto bitrateStep = videoBitrate / whipSimulcastTotalLayers;
 		std::string encoder_name = "whip_simulcast_0";
 
 		for (auto i = whipSimulcastTotalLayers - 1; i > 0; i--) {
-			uint32_t width = widthStep * i;
-			width -= width % 2;
-
-			uint32_t height = heightStep * i;
-			height -= height % 2;
+			uint32_t width;
+			uint32_t height;
 
 			encoder_name[encoder_name.size() - 1] = std::to_string(i).at(0);
 			OBSDataAutoRelease layerSettings;
+
+			// layer slot numbering (1, 2, ...) matches rid, which
+			// counts down as i does here - see the Settings UI's
+			// RebuildWHIPSimulcastLayerRows for the same
+			// convention on the writing side.
+			int slot = whipSimulcastTotalLayers - i;
+			WHIPSimulcastLayer custom;
+			bool haveCustom = GetWHIPSimulcastLayerConfig(config, slot, &custom);
+
+			// Resolution: follow the main output's current size
+			// (recomputed here from outputWidth/outputHeight,
+			// which the caller re-reads via video_output_get_*
+			// every time Create() runs after a ResetOutputs()) -
+			// unless the user explicitly unchecked "Follow Main"
+			// for this layer and locked in their own width/height.
+			if (haveCustom && !custom.followMain) {
+				usingCustomLayer[i] = true;
+				width = custom.width;
+				height = custom.height;
+			} else {
+				width = widthStep * i;
+				width -= width % 2;
+				height = heightStep * i;
+				height -= height % 2;
+			}
+
 			if (videoSettings) {
 				layerSettings = obs_data_create_from_json(obs_data_get_json(videoSettings));
-				obs_data_set_int(layerSettings, "bitrate", videoBitrate - bitrateStep);
-				videoBitrate -= bitrateStep;
+				if (haveCustom) {
+					obs_data_set_int(layerSettings, "bitrate", custom.bitrateKbps);
+				} else {
+					// halve per slot below the top layer
+					// (slot=1 -> 1/2, slot=2 -> 1/4, ...)
+					// rather than an equal step-down, so
+					// bitrate scales with resolution
+					// (halved on each axis => quartered
+					// pixel count per step).
+					obs_data_set_int(layerSettings, "bitrate", videoBitrate >> slot);
+				}
 			}
 
 			auto whip_simulcast_encoder =
@@ -66,14 +164,31 @@ public:
 		}
 	}
 
-	void Update(obs_data_t *videoSettings, int videoBitrate)
+	// config is the same main->Config() passed to Create() - re-read
+	// here (rather than cached from Create()) so a config change saved
+	// while streaming (e.g. editing Settings > Stream mid-stream, which
+	// the UI allows) is picked up on the next Update() the same way the
+	// main encoder's own bitrate change already is.
+	void Update(obs_data_t *videoSettings, int videoBitrate, config_t *config = nullptr)
 	{
-		auto bitrateStep = videoBitrate / static_cast<int>(whipSimulcastEncoders.size() + 1);
-		for (auto &whipSimulcastEncoder : whipSimulcastEncoders) {
-			videoBitrate -= bitrateStep;
+		for (size_t idx = 0; idx < whipSimulcastEncoders.size(); idx++) {
 			OBSDataAutoRelease layerSettings = obs_data_create_from_json(obs_data_get_json(videoSettings));
-			obs_data_set_int(layerSettings, "bitrate", videoBitrate);
-			obs_encoder_update(whipSimulcastEncoder, layerSettings);
+
+			// idx counts up from 0 for the highest-quality
+			// scaled-down layer (rid=1) - see Create(), which
+			// appends in the same i=N-1..1 (i.e. slot=1..N-1)
+			// order this loop walks forward through.
+			WHIPSimulcastLayer custom;
+			int slot = static_cast<int>(idx) + 1;
+			if (GetWHIPSimulcastLayerConfig(config, slot, &custom)) {
+				obs_data_set_int(layerSettings, "bitrate", custom.bitrateKbps);
+			} else {
+				// halve per slot below the top layer, same
+				// as Create()'s fallback formula.
+				obs_data_set_int(layerSettings, "bitrate", videoBitrate >> slot);
+			}
+
+			obs_encoder_update(whipSimulcastEncoders[idx], layerSettings);
 		}
 	}
 
@@ -106,4 +221,5 @@ public:
 
 private:
 	std::vector<OBSEncoder> whipSimulcastEncoders;
+	std::vector<bool> usingCustomLayer;
 };

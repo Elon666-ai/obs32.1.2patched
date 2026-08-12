@@ -52,6 +52,7 @@ private slots:
 	void EnableVirtualCamButtons();
 
 	void SetScheduleForceDisabled(bool disabled);
+	void SetScheduleActive(bool active);
 
 public:
 	OBSBasicControls(OBSBasic *main);
@@ -59,6 +60,7 @@ public:
 
 signals:
 	void StreamButtonClicked();
+	void ScheduleButtonClicked();
 	void BroadcastButtonClicked();
 	void RecordButtonClicked();
 	void PauseRecordButtonClicked();
