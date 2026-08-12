@@ -83,6 +83,21 @@ public:
 			obs_encoder_set_preferred_video_format(enc, format);
 	}
 
+	// Create() binds each layer's encoder to obs_get_video() once, at
+	// creation time. If video is reset (e.g. resolution change) afterward
+	// without recreating the output handler, that video_t is destroyed and
+	// the encoders are left pointing at a stale, freed video mix. The main
+	// video/recording encoders get rebound on every SetupOutputs() call
+	// (see AdvancedOutput::SetupOutputs/SimpleOutput::SetupOutputs); do the
+	// same here so simulcast layers don't dereference a dangling mix
+	// (obs_encoder_video_tex_active -> get_mix_for_video -> NULL) the next
+	// time streaming starts.
+	void SetVideo()
+	{
+		for (auto enc : whipSimulcastEncoders)
+			obs_encoder_set_video(enc, obs_get_video());
+	}
+
 	void SetStreamOutput(obs_output_t *streamOutput)
 	{
 		for (size_t i = 0; i < whipSimulcastEncoders.size(); i++)

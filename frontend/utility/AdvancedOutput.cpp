@@ -541,6 +541,8 @@ void AdvancedOutput::SetupOutputs()
 	obs_encoder_set_video(videoStreaming, obs_get_video());
 	if (videoRecording)
 		obs_encoder_set_video(videoRecording, obs_get_video());
+	if (whipSimulcastEncoders != nullptr)
+		whipSimulcastEncoders->SetVideo();
 	for (size_t i = 0; i < MAX_AUDIO_MIXES; i++) {
 		obs_encoder_set_audio(streamTrack[i], obs_get_audio());
 		obs_encoder_set_audio(recordTrack[i], obs_get_audio());

@@ -566,6 +566,8 @@ inline void SimpleOutput::SetupOutputs()
 {
 	SimpleOutput::Update();
 	obs_encoder_set_video(videoStreaming, obs_get_video());
+	if (whipSimulcastEncoders != nullptr)
+		whipSimulcastEncoders->SetVideo();
 	obs_encoder_set_audio(audioStreaming, obs_get_audio());
 	obs_encoder_set_audio(audioArchive, obs_get_audio());
 	int tracks = config_get_int(main->Config(), "SimpleOutput", "RecTracks");
