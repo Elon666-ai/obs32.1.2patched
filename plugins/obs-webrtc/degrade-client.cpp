@@ -1,5 +1,6 @@
 #include "degrade-client.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <obs.hpp>
 #include <nlohmann/json.hpp>
@@ -58,6 +59,8 @@ WsDegradeClient::WsDegradeClient()
 
 	client.set_open_handler([this](handle_t) {
 		do_log(LOG_INFO, "WS connected to %s", ws_url.c_str());
+		std::lock_guard<std::mutex> lk(mtx);
+		reconnect_backoff_ms = kReconnectBackoffMinMs;
 	});
 
 	client.set_close_handler([this](handle_t) {
@@ -76,6 +79,14 @@ WsDegradeClient::WsDegradeClient()
 		       reason.empty() ? "(none)" : reason.c_str());
 		std::lock_guard<std::mutex> lk(mtx);
 		conn.reset();
+		// Schedule a reconnect attempt; the worker loop's idle tick
+		// picks this up (see ShouldReconnectLocked/ConnectLocked).
+		// Without this, a dropped connection (e.g. code=1006
+		// abnormal close) just sits idle forever, silently losing
+		// the ability to receive further degrade/recover commands
+		// for the rest of the stream.
+		next_reconnect_attempt_ns = os_gettime_ns() + (uint64_t)reconnect_backoff_ms * 1000000ULL;
+		reconnect_backoff_ms = std::min(reconnect_backoff_ms * 2, kReconnectBackoffMaxMs);
 	});
 
 	client.set_fail_handler([this](handle_t) {
@@ -91,6 +102,8 @@ WsDegradeClient::WsDegradeClient()
 		       ec_msg.empty() ? "(unknown)" : ec_msg.c_str());
 		std::lock_guard<std::mutex> lk(mtx);
 		conn.reset();
+		next_reconnect_attempt_ns = os_gettime_ns() + (uint64_t)reconnect_backoff_ms * 1000000ULL;
+		reconnect_backoff_ms = std::min(reconnect_backoff_ms * 2, kReconnectBackoffMaxMs);
 	});
 
 	client.set_message_handler([this](handle_t h, client_t::message_ptr msg) {
@@ -125,6 +138,10 @@ WsDegradeClient::WsDegradeClient()
 			client.run();
 			// brief sleep to avoid busy-loop when no io work
 			os_sleep_ms(50);
+
+			std::lock_guard<std::mutex> lk(mtx);
+			if (ShouldReconnectLocked())
+				ConnectLocked();
 		}
 	});
 }
@@ -145,6 +162,50 @@ WsDegradeClient::~WsDegradeClient()
 	client.stop();
 	if (worker.joinable())
 		worker.join();
+}
+
+// -------------------------------------------------------------------
+//  Connection (re)establishment
+// -------------------------------------------------------------------
+bool WsDegradeClient::ShouldReconnectLocked() const
+{
+	return !conn && !ws_url.empty() && next_reconnect_attempt_ns != 0 &&
+	       os_gettime_ns() >= next_reconnect_attempt_ns;
+}
+
+void WsDegradeClient::ConnectLocked()
+{
+	next_reconnect_attempt_ns = 0;
+
+	do_log(LOG_INFO, "Connecting to %s", ws_url.c_str());
+
+	websocketpp::lib::error_code ec;
+	conn = client.get_connection(ws_url, ec);
+	if (ec) {
+		do_log(LOG_ERROR, "Failed to create connection %s: %s", ws_url.c_str(), ec.message().c_str());
+		conn.reset();
+		// Retry later rather than giving up permanently - a
+		// transient local resource error shouldn't need a full
+		// output restart (RegisterOutput call) to recover from.
+		next_reconnect_attempt_ns = os_gettime_ns() + (uint64_t)reconnect_backoff_ms * 1000000ULL;
+		reconnect_backoff_ms = std::min(reconnect_backoff_ms * 2, kReconnectBackoffMaxMs);
+		return;
+	}
+
+	// Read WHIP_WS_SECRET — prefer env var, fall back to hard-coded
+	// default (must match mmx's WHIP_DEGRADE_WS_SECRET).
+	{
+		const char *secret = getenv("WHIP_WS_SECRET");
+		if (!secret || !secret[0])
+			secret = "de4e53fe0b4565358cf5b47c89cc6dbbc0f902c62e4c2952";
+
+		conn->append_header("Authorization",
+				    std::string("Bearer ") + secret);
+		do_log(LOG_INFO, "WS auth: Bearer header set (secret src: %s)",
+		       getenv("WHIP_WS_SECRET") ? "env" : "hardcoded-default");
+	}
+
+	client.connect(conn);
 }
 
 // -------------------------------------------------------------------
@@ -203,31 +264,10 @@ void WsDegradeClient::RegisterOutput(obs_output_t *out)
 		conn.reset();
 	}
 
-	// Open new connection
-	do_log(LOG_INFO, "Connecting to %s", ws_url.c_str());
-
-	websocketpp::lib::error_code ec;
-	conn = client.get_connection(ws_url, ec);
-	if (ec) {
-		do_log(LOG_ERROR, "Failed to create connection %s: %s", ws_url.c_str(), ec.message().c_str());
-		conn.reset();
-		return;
-	}
-
-	// Read WHIP_WS_SECRET — prefer env var, fall back to hard-coded
-	// default (must match mmx's WHIP_DEGRADE_WS_SECRET).
-	{
-		const char *secret = getenv("WHIP_WS_SECRET");
-		if (!secret || !secret[0])
-			secret = "de4e53fe0b4565358cf5b47c89cc6dbbc0f902c62e4c2952";
-
-		conn->append_header("Authorization",
-				    std::string("Bearer ") + secret);
-		do_log(LOG_INFO, "WS auth: Bearer header set (secret src: %s)",
-		       getenv("WHIP_WS_SECRET") ? "env" : "hardcoded-default");
-	}
-
-	client.connect(conn);
+	// Fresh endpoint: reset backoff state so the first attempt on it
+	// isn't delayed by whatever the previous endpoint's failures ran up.
+	reconnect_backoff_ms = kReconnectBackoffMinMs;
+	ConnectLocked();
 }
 
 void WsDegradeClient::UnregisterOutput()

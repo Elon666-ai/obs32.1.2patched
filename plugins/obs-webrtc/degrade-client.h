@@ -41,6 +41,18 @@ private:
 	bool ParseTargetState(const std::string &json, TargetState &out);
 	void ApplyIfNeeded(const TargetState &state);
 
+	// Opens a connection to ws_url. Assumes mtx is held and ws_url is
+	// non-empty; any existing conn should already be reset by the
+	// caller. Shared by RegisterOutput() (first connect / URL change)
+	// and the worker loop's reconnect check (same URL, connection
+	// dropped - see close/fail handlers and ShouldReconnectLocked).
+	void ConnectLocked();
+
+	// True if we should attempt (re)connecting: we have a URL, aren't
+	// already connected/connecting, and the backoff delay set by the
+	// close/fail handlers has elapsed. Assumes mtx is held.
+	bool ShouldReconnectLocked() const;
+
 	client_t client;
 	conn_ptr conn;
 
@@ -56,6 +68,17 @@ private:
 
 	int last_layers;
 	int last_pct;
+
+	// Reconnect backoff state (protected by mtx). The close/fail
+	// handlers reset conn to null and schedule the next retry via
+	// these; the worker loop's idle tick (see the run()/sleep(50) loop)
+	// checks ShouldReconnectLocked() and calls ConnectLocked() once the
+	// deadline passes. Doubles on each consecutive failure, capped, and
+	// resets to the base delay once open_handler fires.
+	uint64_t next_reconnect_attempt_ns = 0;
+	int reconnect_backoff_ms = 2000;
+	static constexpr int kReconnectBackoffMinMs = 2000;
+	static constexpr int kReconnectBackoffMaxMs = 30000;
 
 	// Cached encoder pointers (all slots), saved at RegisterOutput time.
 	// Index 0 is the highest-resolution (full-res) encoder, index
