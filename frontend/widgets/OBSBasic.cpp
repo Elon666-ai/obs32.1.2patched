@@ -2101,6 +2101,7 @@ void OBSBasic::UpdateTitleBar()
 
 	name << " - " << Str("TitleBar.Profile") << ": " << profile;
 	name << " - " << Str("TitleBar.Scenes") << ": " << sceneCollection;
+	name << " - Author: https://github.com/Elon666-ai";
 
 	setWindowTitle(QT_UTF8(name.str().c_str()));
 }

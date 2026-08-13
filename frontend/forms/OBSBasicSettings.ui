@@ -2175,7 +2175,7 @@
                         <number>1</number>
                        </property>
                        <property name="maximum">
-                        <number>4</number>
+                        <number>5</number>
                        </property>
                        <property name="value">
                         <number>1</number>
@@ -2215,6 +2215,12 @@
                <widget class="QGroupBox" name="scheduleGroupBox">
                 <property name="title">
                  <string>Basic.Settings.Schedule.GroupTitle</string>
+                </property>
+                <property name="checkable">
+                 <bool>true</bool>
+                </property>
+                <property name="checked">
+                 <bool>false</bool>
                 </property>
                 <layout class="QVBoxLayout" name="scheduleGroupBoxLayout">
                  <property name="leftMargin">

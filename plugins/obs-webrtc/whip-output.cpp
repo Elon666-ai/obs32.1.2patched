@@ -114,6 +114,20 @@ bool WHIPOutput::Start()
 	if (!obs_output_initialize_encoders(output, 0))
 		return false;
 
+#ifdef WHIP_DEGRADE_ACTIVE
+	// Kick off the mmx degrade-channel WS connection as early as
+	// possible (before the WHIP/RTC connection itself even starts
+	// negotiating in StartThread below), rather than waiting until
+	// after data capture has begun - the WS connection and the WHIP
+	// connection are otherwise unrelated, so there's no reason to
+	// serialize them. Simulcast layer count is decided purely by local
+	// config and is never touched by degrade-client regardless of when
+	// this is called (see the comment on TargetState in
+	// degrade-client.h); this just gets bitrate-degrade adaptation
+	// wired up sooner.
+	WsDegradeClient::Instance().RegisterOutput(output);
+#endif
+
 	if (start_stop_thread.joinable())
 		start_stop_thread.join();
 	start_stop_thread = std::thread(&WHIPOutput::StartThread, this, generation);
@@ -804,10 +818,6 @@ void WHIPOutput::StartThread(uint64_t generation)
 
 	obs_output_begin_data_capture(output, 0);
 	running = true;
-
-#ifdef WHIP_DEGRADE_ACTIVE
-	WsDegradeClient::Instance().RegisterOutput(output);
-#endif
 }
 
 void WHIPOutput::SendDelete(const std::string &resourceURL, uint64_t generation, const char *reason)

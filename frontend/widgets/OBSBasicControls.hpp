@@ -20,6 +20,11 @@ class OBSBasicControls : public QFrame {
 	QPointer<QAction> stopStreamAction;
 
 	bool scheduleForceDisabled = false;
+	bool scheduleFeatureEnabled = false;
+	bool scheduleActive = false;
+	bool streamingActive = false;
+
+	void UpdateScheduleButtonEnabled();
 
 private slots:
 	void StreamingPreparing();
@@ -53,6 +58,7 @@ private slots:
 
 	void SetScheduleForceDisabled(bool disabled);
 	void SetScheduleActive(bool active);
+	void SetScheduleFeatureEnabled(bool enabled);
 
 public:
 	OBSBasicControls(OBSBasic *main);

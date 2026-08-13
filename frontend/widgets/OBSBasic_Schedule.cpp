@@ -45,6 +45,7 @@ void OBSBasic::InitSchedule()
 		});
 
 	emit ScheduleEnabledChanged(ScheduleEnabled());
+	emit ScheduleFeatureEnabledChanged(ScheduleFeatureEnabled());
 
 	CheckSchedule();
 }
@@ -56,8 +57,42 @@ bool OBSBasic::ScheduleEnabled() const
 	return config_get_bool(activeConfiguration, "Schedule", "Enabled");
 }
 
+// "Schedule"/"FeatureEnabled" - see the comment on the declaration in
+// OBSBasic.hpp. Written from Settings > Stream > Scheduled Streaming
+// Configuration (OBSBasicSettings::SaveScheduleSettings).
+bool OBSBasic::ScheduleFeatureEnabled() const
+{
+	if (!activeConfiguration)
+		return false;
+	return config_get_bool(activeConfiguration, "Schedule", "FeatureEnabled");
+}
+
+// Called after the feature switch may have changed (from
+// OBSBasicSettings::SaveScheduleSettings, via the profileSettingChanged ->
+// ReloadSchedule path). If the feature was just turned off while a
+// schedule was actively running, stop it the same way the control panel
+// button's "stop" click would - don't leave a schedule silently running
+// with no way to see/control it once its enabling switch is gone.
+void OBSBasic::RefreshScheduleFeatureState()
+{
+	bool featureEnabled = ScheduleFeatureEnabled();
+	emit ScheduleFeatureEnabledChanged(featureEnabled);
+
+	if (!featureEnabled && ScheduleEnabled()) {
+		config_set_bool(activeConfiguration, "Schedule", "Enabled", false);
+		StopScheduledStream();
+		emit ScheduleEnabledChanged(false);
+		activeConfiguration.SaveSafe("tmp");
+	}
+}
+
 void OBSBasic::ReloadSchedule()
 {
+	// RefreshScheduleFeatureState() may itself force Schedule/Enabled off
+	// (and emit ScheduleEnabledChanged) if the feature switch was just
+	// disabled - do that first so the plain ScheduleEnabledChanged emit
+	// below reflects the final state, not a stale one.
+	RefreshScheduleFeatureState();
 	emit ScheduleEnabledChanged(ScheduleEnabled());
 	CheckSchedule();
 }
@@ -150,6 +185,24 @@ void OBSBasic::ScheduleButtonClicked()
 	 * hands manual control back, same as disabling it used to do from
 	 * Settings before that checkbox was replaced by this button. */
 	bool nowEnabled = !ScheduleEnabled();
+
+	// The control panel button is disabled while the feature switch is
+	// off (see OBSBasicControls::UpdateScheduleButtonEnabled), so this
+	// should be unreachable in practice - kept as a safety net against
+	// other trigger paths (e.g. a future hotkey).
+	if (nowEnabled && !ScheduleFeatureEnabled())
+		return;
+
+	// Scheduled streaming takes over the manual Start/Stop Streaming
+	// path (see CheckSchedule()) - if a manually-started stream is
+	// already running (or connecting), refuse to hand control over to
+	// the schedule rather than silently taking it over or stopping it.
+	// The control panel button is disabled while a manual stream is
+	// active/connecting (see OBSBasicControls::UpdateScheduleButtonEnabled),
+	// so this should be unreachable in practice, same as the feature
+	// switch check above.
+	if (nowEnabled && (streamingStarting || (outputHandler && outputHandler->StreamingActive())))
+		return;
 
 	config_set_bool(activeConfiguration, "Schedule", "Enabled", nowEnabled);
 

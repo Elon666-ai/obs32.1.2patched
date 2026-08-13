@@ -101,12 +101,22 @@ OBSBasicControls::OBSBasicControls(OBSBasic *main) : QFrame(nullptr), ui(new Ui:
 
 	connect(main, &OBSBasic::ScheduleEnabledChanged, this, &OBSBasicControls::SetScheduleForceDisabled);
 	connect(main, &OBSBasic::ScheduleEnabledChanged, this, &OBSBasicControls::SetScheduleActive);
+	connect(main, &OBSBasic::ScheduleFeatureEnabledChanged, this, &OBSBasicControls::SetScheduleFeatureEnabled);
+
+	SetScheduleFeatureEnabled(main->ScheduleFeatureEnabled());
 }
 
 void OBSBasicControls::StreamingPreparing()
 {
 	ui->streamButton->setEnabled(false);
 	ui->streamButton->setText(QTStr("Basic.Main.PreparingStream"));
+
+	// Lock out Scheduled Streaming as soon as a manual stream starts
+	// connecting, not just once it's fully up (StreamingStarted) - a
+	// failed connection attempt resets this via StreamingStopped(), the
+	// only other place manual streaming ends up at from here.
+	streamingActive = true;
+	UpdateScheduleButtonEnabled();
 }
 
 void OBSBasicControls::StreamingStarting(bool broadcastAutoStart)
@@ -136,6 +146,9 @@ void OBSBasicControls::StreamingStarted(bool withDelay)
 		startStreamAction->setVisible(false);
 		stopStreamAction->setVisible(true);
 	}
+
+	streamingActive = true;
+	UpdateScheduleButtonEnabled();
 }
 
 void OBSBasicControls::StreamingStopping()
@@ -158,6 +171,9 @@ void OBSBasicControls::StreamingStopped(bool withDelay)
 	} else {
 		ui->streamButton->setMenu(nullptr);
 	}
+
+	streamingActive = false;
+	UpdateScheduleButtonEnabled();
 }
 
 void OBSBasicControls::BroadcastStreamReady(bool ready)
@@ -297,6 +313,37 @@ void OBSBasicControls::SetScheduleForceDisabled(bool disabled)
 
 void OBSBasicControls::SetScheduleActive(bool active)
 {
+	scheduleActive = active;
 	setClasses(ui->scheduleButton, active ? "state-active" : "");
 	ui->scheduleButton->setText(QTStr(active ? "Basic.Main.StopSchedule" : "Basic.Main.StartSchedule"));
+	UpdateScheduleButtonEnabled();
+}
+
+void OBSBasicControls::SetScheduleFeatureEnabled(bool enabled)
+{
+	scheduleFeatureEnabled = enabled;
+	UpdateScheduleButtonEnabled();
+}
+
+// The "Start/Stop Scheduled Streaming" button is only clickable once the
+// feature has been enabled from Settings > Stream > Scheduled Streaming
+// Configuration (see OBSBasicSettings::SaveScheduleSettings, the checkable
+// scheduleGroupBox), and not while a manually-started stream is active or
+// connecting (streamingActive) - scheduled and manual streaming are
+// mutually exclusive, see OBSBasic::StreamActionTriggered() for the other
+// direction. A schedule that's already running must stay stoppable
+// regardless of either of those, though (scheduleActive overrides both).
+void OBSBasicControls::UpdateScheduleButtonEnabled()
+{
+	bool enabled = scheduleActive || (scheduleFeatureEnabled && !streamingActive);
+	ui->scheduleButton->setEnabled(enabled);
+
+	QString tooltip;
+	if (!enabled) {
+		// Feature-disabled takes priority: it's the prerequisite the
+		// user needs to address first regardless of streaming state.
+		tooltip = !scheduleFeatureEnabled ? QTStr("Basic.Main.ScheduleButton.FeatureDisabledTooltip")
+						   : QTStr("Basic.Main.ScheduleButton.ManualStreamActiveTooltip");
+	}
+	ui->scheduleButton->setToolTip(tooltip);
 }
