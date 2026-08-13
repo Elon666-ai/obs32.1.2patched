@@ -2212,6 +2212,27 @@
                </widget>
                </item>
               <item>
+               <widget class="QGroupBox" name="scheduleGroupBox">
+                <property name="title">
+                 <string>Basic.Settings.Schedule.GroupTitle</string>
+                </property>
+                <layout class="QVBoxLayout" name="scheduleGroupBoxLayout">
+                 <property name="leftMargin">
+                  <number>9</number>
+                 </property>
+                 <property name="topMargin">
+                  <number>2</number>
+                 </property>
+                 <property name="rightMargin">
+                  <number>9</number>
+                 </property>
+                 <property name="bottomMargin">
+                  <number>9</number>
+                 </property>
+                </layout>
+               </widget>
+              </item>
+              <item>
                <widget class="QGroupBox" name="serviceAdvancedOptionsGroupBox">
                 <property name="title">
                  <string>Basic.Settings.Stream.AdvancedOptions</string>
@@ -2288,27 +2309,6 @@
                    </property>
                   </widget>
                  </item>
-                </layout>
-               </widget>
-              </item>
-              <item>
-               <widget class="QGroupBox" name="scheduleGroupBox">
-                <property name="title">
-                 <string>Basic.Settings.Schedule.GroupTitle</string>
-                </property>
-                <layout class="QVBoxLayout" name="scheduleGroupBoxLayout">
-                 <property name="leftMargin">
-                  <number>9</number>
-                 </property>
-                 <property name="topMargin">
-                  <number>2</number>
-                 </property>
-                 <property name="rightMargin">
-                  <number>9</number>
-                 </property>
-                 <property name="bottomMargin">
-                  <number>9</number>
-                 </property>
                 </layout>
                </widget>
               </item>
