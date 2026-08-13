@@ -44,6 +44,7 @@
 #include <QCompleter>
 #include <QStandardItemModel>
 
+#include <algorithm>
 #include <sstream>
 
 #include "moc_OBSBasicSettings.cpp"
@@ -1165,7 +1166,37 @@ void OBSBasicSettings::LoadLanguageList()
 
 	ui->language->clear();
 
-	for (const auto &locale : GetLocaleNames()) {
+	// English, Simplified Chinese, and Traditional Chinese are pinned to
+	// the top (in that order); everything else follows alphabetically by
+	// display name, same as the old model()->sort(0) did for the whole
+	// list.
+	auto locales = GetLocaleNames();
+	auto pinnedRank = [](const std::string &tag) -> int {
+		if (tag == "en-US")
+			return 0;
+		if (tag == "zh-CN")
+			return 1;
+		if (tag == "zh-TW")
+			return 2;
+		return -1;
+	};
+	std::stable_sort(locales.begin(), locales.end(),
+			 [&](const std::pair<std::string, std::string> &a,
+			     const std::pair<std::string, std::string> &b) {
+				 int rankA = pinnedRank(a.first);
+				 int rankB = pinnedRank(b.first);
+				 if (rankA != -1 || rankB != -1) {
+					 if (rankA == -1)
+						 return false;
+					 if (rankB == -1)
+						 return true;
+					 return rankA < rankB;
+				 }
+				 return QString::localeAwareCompare(QT_UTF8(a.second.c_str()),
+								    QT_UTF8(b.second.c_str())) < 0;
+			 });
+
+	for (const auto &locale : locales) {
 		int idx = ui->language->count();
 
 		ui->language->addItem(QT_UTF8(locale.second.c_str()), QT_UTF8(locale.first.c_str()));
@@ -1173,8 +1204,6 @@ void OBSBasicSettings::LoadLanguageList()
 		if (locale.first == currentLang)
 			ui->language->setCurrentIndex(idx);
 	}
-
-	ui->language->model()->sort(0);
 }
 
 #if defined(_WIN32) || defined(ENABLE_SPARKLE_UPDATER)
