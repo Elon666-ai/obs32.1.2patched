@@ -22,8 +22,9 @@
 
 namespace {
 
-/* Qt::DayOfWeek is 1 (Monday) .. 7 (Sunday), matching the order the config
- * keys are written in by OBSBasicSettings_Schedule.cpp. */
+/* Qt::DayOfWeek is 1 (Monday) .. 7 (Sunday); index here is that minus 1,
+ * matching the order OBSBasicSettings_Schedule.cpp writes per-slot
+ * "Slot<N>.Day.<key>" config keys in. */
 constexpr const char *kScheduleDayKeys[7] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
 
 /* How often the schedule is checked against the wall clock. */
@@ -85,14 +86,24 @@ void OBSBasic::CheckSchedule()
 	if (dayIdx < 0 || dayIdx > 6)
 		return;
 
+	int nowMinutes = now.time().hour() * 60 + now.time().minute();
 	std::string dayKey = kScheduleDayKeys[dayIdx];
-	bool dayEnabled = config_get_bool(activeConfiguration, "Schedule", (dayKey + ".Enabled").c_str());
 
+	/* Streaming should be active if *any* slot covers the current weekday
+	 * and time - slots are validated not to overlap on the same day at
+	 * save time (see OBSBasicSettings::ValidateScheduleSlots), so at most
+	 * one can ever match, but this doesn't rely on that. */
 	bool shouldBeStreaming = false;
-	if (dayEnabled) {
-		int startMinutes = (int)config_get_int(activeConfiguration, "Schedule", (dayKey + ".Start").c_str());
-		int endMinutes = (int)config_get_int(activeConfiguration, "Schedule", (dayKey + ".End").c_str());
-		int nowMinutes = now.time().hour() * 60 + now.time().minute();
+	int slotCount = (int)config_get_int(activeConfiguration, "Schedule", "Slot.Count");
+	for (int i = 0; i < slotCount && !shouldBeStreaming; i++) {
+		std::string prefix = "Slot" + std::to_string(i) + ".";
+
+		bool dayEnabled = config_get_bool(activeConfiguration, "Schedule", (prefix + "Day." + dayKey).c_str());
+		if (!dayEnabled)
+			continue;
+
+		int startMinutes = (int)config_get_int(activeConfiguration, "Schedule", (prefix + "Start").c_str());
+		int endMinutes = (int)config_get_int(activeConfiguration, "Schedule", (prefix + "End").c_str());
 
 		shouldBeStreaming = nowMinutes >= startMinutes && nowMinutes < endMinutes;
 	}

@@ -3763,6 +3763,12 @@ bool OBSBasicSettings::QueryAllowedToClose()
 		return false;
 	}
 
+	if (!ValidateScheduleSlots()) {
+		OBSMessageBox::warning(this, QTStr("Basic.Settings.Schedule.OverlapWarning.Title"),
+				       QTStr("Basic.Settings.Schedule.OverlapWarning"));
+		return false;
+	}
+
 	return true;
 }
 
