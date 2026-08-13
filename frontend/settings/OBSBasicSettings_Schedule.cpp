@@ -22,6 +22,7 @@
 #include <qt-wrappers.hpp>
 
 #include <QCheckBox>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
@@ -61,6 +62,15 @@ void OBSBasicSettings::InitSchedulePage()
 	groupBoxLayout->addWidget(hintLabel);
 	groupBoxLayout->addWidget(scheduleOverlapWarning);
 	groupBoxLayout->addWidget(addButton);
+
+	// scheduleGroupBox is checkable (see the .ui file) and acts as the
+	// master switch for the whole feature - unchecking it disables all
+	// child widgets automatically (native QGroupBox behavior) and, once
+	// saved, also disables the control panel's "Start/Stop Scheduled
+	// Streaming" button (see OBSBasicControls::SetScheduleFeatureEnabled)
+	// and stops any schedule currently running (see
+	// OBSBasic::RefreshScheduleFeatureState).
+	HookWidget(ui->scheduleGroupBox, &QGroupBox::toggled, &OBSBasicSettings::ScheduleChanged);
 }
 
 // Builds one row: start/end QTimeEdit, seven weekday QCheckBoxes, a remove
@@ -208,6 +218,8 @@ void OBSBasicSettings::LoadScheduleSettings()
 
 	config_t *config = main->Config();
 
+	ui->scheduleGroupBox->setChecked(config_get_bool(config, "Schedule", "FeatureEnabled"));
+
 	for (auto &slot : scheduleSlots)
 		delete slot.rowWidget;
 	scheduleSlots.clear();
@@ -236,6 +248,8 @@ void OBSBasicSettings::LoadScheduleSettings()
 void OBSBasicSettings::SaveScheduleSettings()
 {
 	config_t *config = main->Config();
+
+	config_set_bool(config, "Schedule", "FeatureEnabled", ui->scheduleGroupBox->isChecked());
 
 	// Clear all previously-saved slots first (old slot count may be
 	// larger than the current one) so a shrink doesn't leave stale
@@ -270,12 +284,16 @@ void OBSBasicSettings::SaveScheduleSettings()
 					slot.days[d]->isChecked());
 	}
 
-	/* Whether Scheduled Streaming itself is on/off ("Schedule"/"Enabled")
-	 * is no longer controlled from this page - see
-	 * OBSBasic::ScheduleButtonClicked() (control panel "Start/Stop
-	 * Scheduled Streaming" button). Slot changes made here take effect
-	 * immediately for a schedule that's already running, via the
-	 * profileSettingChanged emit below. */
+	/* Whether a schedule is currently *running* ("Schedule"/"Enabled") is
+	 * controlled from the control panel's "Start/Stop Scheduled
+	 * Streaming" button (see OBSBasic::ScheduleButtonClicked()), not from
+	 * here - this page only controls whether the feature can be used at
+	 * all ("Schedule"/"FeatureEnabled", set above) and the configured
+	 * time slots. Both slot changes and a feature-switch flip made here
+	 * take effect immediately (including stopping an already-running
+	 * schedule if the feature switch was just turned off), via the
+	 * profileSettingChanged emit below - see
+	 * OBSBasic::RefreshScheduleFeatureState(). */
 	emit main->profileSettingChanged("Schedule", "SettingsChanged");
 }
 

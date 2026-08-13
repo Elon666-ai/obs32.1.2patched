@@ -1408,12 +1408,24 @@ private:
 public:
 	void StopScheduledStream();
 
+	// "Schedule"/"FeatureEnabled" - the master switch set in Settings >
+	// Stream > Scheduled Streaming Configuration (see
+	// OBSBasicSettings::LoadScheduleSettings/SaveScheduleSettings). This
+	// is distinct from "Schedule"/"Enabled" (ScheduleEnabled() above),
+	// which tracks whether a schedule is *currently running* (toggled by
+	// the control panel button) - a schedule can only be started while
+	// this feature switch is on, but once running, disabling this switch
+	// also stops it (see SaveScheduleSettings/RefreshScheduleFeatureState).
+	bool ScheduleFeatureEnabled() const;
+	void RefreshScheduleFeatureState();
+
 public slots:
 	void ReloadSchedule();
 	void ScheduleButtonClicked();
 
 signals:
 	void ScheduleEnabledChanged(bool enabled);
+	void ScheduleFeatureEnabledChanged(bool enabled);
 
 	/* -------------------------------------
 	 * MARK: - OBSBasic_StudioMode

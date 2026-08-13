@@ -3,7 +3,6 @@
 #include <obs-module.h>
 
 #include <string>
-#include <vector>
 #include <atomic>
 #include <thread>
 #include <mutex>
@@ -12,9 +11,15 @@
 #include <websocketpp/config/asio_no_tls_client.hpp>
 #include <websocketpp/client.hpp>
 
+// Simulcast layer count is decided entirely by the local OBS config (see
+// WHIPSimulcastEncoders.hpp / Settings > Stream > Simulcast) - the mmx
+// server unconditionally accepts up to 5 layers and never gets a say in
+// how many OBS actually sends, so any "layers" field the server might
+// still send in a TARGET_STATE message is intentionally ignored here (see
+// ApplyIfNeeded). Only bitrate_percent (server-driven adaptive bitrate
+// degrade/recover) is applied, and it's applied live via
+// obs_encoder_update() rather than a stop/restart cycle.
 struct TargetState {
-	std::string path;
-	int layers = 3;
 	int bitrate_percent = 100;
 };
 
@@ -28,8 +33,6 @@ public:
 
 	void RegisterOutput(obs_output_t *output);
 	void UnregisterOutput();
-
-	TargetState currentTarget() const { return target_; }
 
 private:
 	WsDegradeClient();
@@ -60,13 +63,15 @@ private:
 	std::string whip_url;
 	std::string ws_url;
 
-	TargetState target_;
 	mutable std::mutex mtx;
 
 	std::atomic<bool> running;
 	std::thread worker;
 
-	int last_layers;
+	// Last bitrate_percent applied, so a repeat/duplicate TARGET_STATE
+	// message is a no-op instead of re-applying the same scale factor
+	// (obs_encoder_update() is cheap but there's no reason to call it
+	// redundantly on every message).
 	int last_pct;
 
 	// Reconnect backoff state (protected by mtx). The close/fail
@@ -79,13 +84,4 @@ private:
 	int reconnect_backoff_ms = 2000;
 	static constexpr int kReconnectBackoffMinMs = 2000;
 	static constexpr int kReconnectBackoffMaxMs = 30000;
-
-	// Cached encoder pointers (all slots), saved at RegisterOutput time.
-	// Index 0 is the highest-resolution (full-res) encoder, index
-	// max_layers-1 is the lowest-resolution simulcast layer. We use
-	// obs_output_set_video_encoder2(out, nullptr, idx) to temporarily
-	// remove the highest-resolution layers when degrading (see
-	// docs/obs-mmx-degrade-protocol.md).
-	std::vector<obs_encoder_t *> all_encoders;
-	int max_layers;
 };

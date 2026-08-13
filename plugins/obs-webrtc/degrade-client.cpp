@@ -45,11 +45,9 @@ WsDegradeClient::WsDegradeClient()
 	  output(nullptr),
 	  whip_url(),
 	  ws_url(),
-	  target_(),
 	  mtx(),
 	  running(true),
 	  worker(),
-	  last_layers(3),
 	  last_pct(100)
 {
 	client.clear_access_channels(websocketpp::log::alevel::all);
@@ -216,29 +214,7 @@ void WsDegradeClient::RegisterOutput(obs_output_t *out)
 	std::lock_guard<std::mutex> lk(mtx);
 	output = out;
 
-	// Cache all video encoder pointers ONCE, the first time we ever see
-	// this output (all_encoders starts empty and is never cleared
-	// afterwards - see ApplyIfNeeded). RegisterOutput is called again
-	// after every degrade/recover-triggered restart, and by then some
-	// slots have deliberately been nulled out (fewer layers); rescanning
-	// obs_output_get_video_encoder2 at that point would stop at the
-	// first null slot and silently shrink max_layers / drop the cached
-	// pointers for the higher layers, making it impossible to ever
-	// recover back up to the real ceiling.
-	if (all_encoders.empty()) {
-		max_layers = 0;
-		for (int i = 0; i < MAX_OUTPUT_VIDEO_ENCODERS; i++) {
-			auto *enc = obs_output_get_video_encoder2(out, i);
-			if (!enc) break;
-			all_encoders.push_back(enc);
-			max_layers++;
-		}
-		do_log(LOG_INFO, "output '%s' registered (%d encoders)",
-		       obs_output_get_name(out), max_layers);
-	} else {
-		do_log(LOG_DEBUG, "output '%s' re-registered after restart (max_layers=%d, unchanged)",
-		       obs_output_get_name(out), max_layers);
-	}
+	do_log(LOG_INFO, "output '%s' registered", obs_output_get_name(out));
 
 	obs_service_t *svc = obs_output_get_service(out);
 	if (!svc)
@@ -286,10 +262,8 @@ bool WsDegradeClient::ParseTargetState(const std::string &json, TargetState &out
 		auto j = nlohmann::json::parse(json);
 		if (!j.contains("type") || j["type"] != "TARGET_STATE")
 			return false;
-		if (j.contains("path"))
-			out.path = j["path"];
-		if (j.contains("layers"))
-			out.layers = j["layers"];
+		// "layers" (if present) is intentionally ignored - see the
+		// comment on TargetState in degrade-client.h.
 		if (j.contains("bitrate_percent"))
 			out.bitrate_percent = j["bitrate_percent"];
 	} catch (const std::exception &e) {
@@ -303,133 +277,58 @@ bool WsDegradeClient::ParseTargetState(const std::string &json, TargetState &out
 //  Apply TARGET_STATE
 // ---------------------------------------------------------------------
 //
-// obs_output_set_video_encoder2() refuses to do anything (just logs a
-// WARNING) while the output is active - see obs-output.c,
-// obs_output_set_video_encoder2(): "tried to set video encoder on output
-// ... while the output is still active!". So the encoder-slot
-// manipulation MUST happen after the output has actually stopped, not
-// before obs_output_stop() is even called. obs_output_stop() is
-// asynchronous (WHIPOutput::Stop() spins up StopThread), so we poll
-// obs_output_active() rather than guessing a fixed sleep duration.
+// Only ever touches bitrate, via obs_encoder_update() - which, per
+// obs-encoder.c, is safe to call on an already-active encoder (the new
+// settings are applied on the encoder thread at the next opportunity
+// instead of being dropped) - so this never needs to stop/restart the
+// output. Simulcast layer count is never modified here; see the comment
+// on TargetState in degrade-client.h for why.
 void WsDegradeClient::ApplyIfNeeded(const TargetState &target)
 {
-	obs_output_t *out_copy = nullptr;
-	int new_layers = 0;
-	{
-		std::lock_guard<std::mutex> lk(mtx);
+	std::lock_guard<std::mutex> lk(mtx);
 
-		if (!output) {
-			do_log(LOG_DEBUG, "no output registered, skip");
-			return;
-		}
-
-		// Read current layer count
-		int cur_layers = 0;
-		for (int i = 0; i < MAX_OUTPUT_VIDEO_ENCODERS; i++) {
-			auto *enc = obs_output_get_video_encoder2(output, i);
-			if (!enc)
-				break;
-			cur_layers++;
-		}
-		if (cur_layers == 0)
-			cur_layers = 1;
-
-		do_log(LOG_INFO,
-		       "TARGET_STATE layers=%d bitrate=%d%% | current layers=%d bitrate=%d%%",
-		       target.layers,
-		       target.bitrate_percent,
-		       cur_layers,
-		       last_pct);
-
-		// Idempotency check
-		if (cur_layers == target.layers && last_pct == target.bitrate_percent) {
-			do_log(LOG_DEBUG, "already in target state, skipping restart");
-			return;
-		}
-
-		new_layers = target.layers;
-		if (new_layers > max_layers)
-			new_layers = max_layers;
-		if (new_layers < 1)
-			new_layers = 1;
-
-		last_layers = target.layers;
-		last_pct = target.bitrate_percent;
-
-		out_copy = output;
-	}
-
-	// --- Stop first (outside the mutex: Stop() re-enters this class via
-	//     UnregisterOutput(), which also takes mtx) ---
-	do_log(LOG_INFO, "Stopping output to apply layers=%d pct=%d%%",
-	       new_layers, target.bitrate_percent);
-	obs_output_stop(out_copy);
-
-	// Wait for the output to actually go inactive - encoder-slot changes
-	// are silently dropped by libobs otherwise. Capped so a stuck
-	// output can't wedge this thread forever.
-	const int max_wait_ms = 5000;
-	int waited_ms = 0;
-	while (obs_output_active(out_copy) && waited_ms < max_wait_ms) {
-		os_sleep_ms(20);
-		waited_ms += 20;
-	}
-	if (obs_output_active(out_copy)) {
-		do_log(LOG_WARNING,
-		       "output did not go inactive within %dms, skipping this TARGET_STATE (will retry on next message)",
-		       max_wait_ms);
+	if (!output) {
+		do_log(LOG_DEBUG, "no output registered, skip");
 		return;
 	}
 
-	{
-		std::lock_guard<std::mutex> lk(mtx);
+	do_log(LOG_INFO, "TARGET_STATE bitrate=%d%% | current bitrate=%d%%", target.bitrate_percent, last_pct);
 
-		// --- Manipulate encoder slots so that WHIPOutput::Start()
-		//     only sees |new_layers| encoders ---------------------
-		//
-		// all_encoders[0] is the full-resolution encoder (highest),
-		// all_encoders[max_layers-1] is the lowest-resolution
-		// simulcast layer (see WHIPSimulcastEncoders::Create /
-		// SetStreamOutput). Per docs/obs-mmx-degrade-protocol.md
-		// ("层数减少的方向：从高分辨率层开始砍"), reducing layers must
-		// drop the highest-resolution layers first and keep the
-		// lowest-resolution ones - i.e. keep the tail of
-		// all_encoders, not the head.
-		//
-		// Remove superfluous encoders (null the slot)
-		for (int i = new_layers; i < MAX_OUTPUT_VIDEO_ENCODERS; i++) {
-			obs_output_set_video_encoder2(out_copy, nullptr, i);
-		}
-
-		// Restore the lowest-resolution |new_layers| cached encoders
-		int first_kept = max_layers - new_layers;
-		for (int i = 0; i < new_layers && (first_kept + i) < (int)all_encoders.size(); i++) {
-			obs_output_set_video_encoder2(out_copy, all_encoders[first_kept + i], i);
-		}
-
-		// --- Update bitrate on every active encoder ----------
-		for (int i = 0; i < new_layers; i++) {
-			auto *enc = obs_output_get_video_encoder2(out_copy, i);
-			if (!enc) continue;
-
-			OBSDataAutoRelease s = obs_encoder_get_settings(enc);
-			int b = (int)obs_data_get_int(s, "bitrate");
-			if (b < 1) b = 20000;
-
-			// Cache base bitrate (per encoder)
-			int base = (int)obs_data_get_int(s, "base_bitrate");
-			if (base == 0) {
-				obs_data_set_int(s, "base_bitrate", b);
-				base = b;
-			}
-
-			long long scaled = (long long)base * target.bitrate_percent / 100LL;
-			if (scaled < 1) scaled = 1;
-			obs_data_set_int(s, "bitrate", (int)scaled);
-		}
+	// Idempotency check
+	if (last_pct == target.bitrate_percent) {
+		do_log(LOG_DEBUG, "already at target bitrate, skipping");
+		return;
 	}
 
-	do_log(LOG_INFO, "Starting output (layers=%d pct=%d%%)",
-	       new_layers, target.bitrate_percent);
-	obs_output_start(out_copy);
+	last_pct = target.bitrate_percent;
+
+	for (int i = 0; i < MAX_OUTPUT_VIDEO_ENCODERS; i++) {
+		auto *enc = obs_output_get_video_encoder2(output, i);
+		if (!enc)
+			break;
+
+		OBSDataAutoRelease s = obs_encoder_get_settings(enc);
+		int b = (int)obs_data_get_int(s, "bitrate");
+		if (b < 1)
+			b = 20000;
+
+		// Cache base bitrate (per encoder) the first time we scale
+		// it, so repeated degrade/recover messages always scale off
+		// the original bitrate rather than compounding off a
+		// previously-scaled value.
+		int base = (int)obs_data_get_int(s, "base_bitrate");
+		if (base == 0) {
+			obs_data_set_int(s, "base_bitrate", b);
+			base = b;
+		}
+
+		long long scaled = (long long)base * target.bitrate_percent / 100LL;
+		if (scaled < 1)
+			scaled = 1;
+		obs_data_set_int(s, "bitrate", (int)scaled);
+
+		obs_encoder_update(enc, s);
+	}
+
+	do_log(LOG_INFO, "Applied bitrate=%d%% (live update, no restart)", target.bitrate_percent);
 }
