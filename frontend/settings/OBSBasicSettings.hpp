@@ -264,14 +264,26 @@ private:
 
 	/* schedule (embedded in the stream page; ui->scheduleGroupBox is
 	 * defined in the .ui file itself, next to the "Advanced Options"
-	 * groupbox) */
-	struct ScheduleDayRow {
-		QPointer<QCheckBox> enabled;
-		QPointer<QTimeEdit> start;
-		QPointer<QTimeEdit> end;
+	 * groupbox). Model is a free-form list of time slots (each with its
+	 * own start/end time and a per-weekday repeat mask), rather than one
+	 * fixed slot per day - see OBSBasic::CheckSchedule() for how these
+	 * are evaluated against the wall clock. */
+	struct ScheduleSlotRow {
+		QWidget *rowWidget;
+		QTimeEdit *start;
+		QTimeEdit *end;
+		std::array<QCheckBox *, 7> days; // index = Qt::DayOfWeek - 1 (Monday..Sunday)
+		QPushButton *removeButton;
 	};
-	std::array<ScheduleDayRow, 7> scheduleDays;
+	std::vector<ScheduleSlotRow> scheduleSlots;
+	QPointer<QLabel> scheduleOverlapWarning;
 	void InitSchedulePage();
+	void AddScheduleSlotRow(int startMinutes, int endMinutes, const std::array<bool, 7> &days);
+	void RemoveScheduleSlotRow(size_t idx);
+	// Returns true (and updates scheduleOverlapWarning / row highlighting)
+	// if no two slots share a day and overlap in time; false blocks
+	// SaveScheduleSettings() from being reachable (see QueryAllowedToClose).
+	bool ValidateScheduleSlots();
 
 private slots:
 	void UpdateMultitrackVideo();
