@@ -1061,7 +1061,6 @@ void OBSBasic::OBSInit()
 
 	ResetOutputs();
 	CreateHotkeys();
-	InitSchedule();
 
 	InitPrimitives();
 
@@ -1362,6 +1361,27 @@ void OBSBasic::OBSInit()
 		QString failed_msg = QTStr("PluginsFailedToLoad.Text").arg(failed_plugins);
 		OBSMessageBox::warning(this, QTStr("PluginsFailedToLoad.Title"), failed_msg);
 	}
+
+	// Deferred (rather than called synchronously here, where it used to
+	// live earlier in OBSInit()) because InitSchedule() can synchronously
+	// start streaming right away if a schedule slot is already active -
+	// encoder creation for that (GPU-backed QSV texture-sharing sessions
+	// in particular) can take a second or more, and running it before
+	// the main window has even been shown left the whole app appearing
+	// frozen/invisible during that time (show() runs earlier in this
+	// same function).
+	//
+	// A 0ms QTimer::singleShot is NOT enough here: OBSInit() itself runs
+	// synchronously from main(), entirely before QApplication::exec()
+	// starts the event loop (see obs-main.cpp) - a 0ms timer's event
+	// just sits queued until exec() finally runs, with no guarantee it's
+	// processed after the window's own first paint/expose events rather
+	// than racing/blocking them. A short but non-zero delay guarantees
+	// the event loop has had time to actually paint the window first;
+	// scheduled streaming already only checks every 5s (see
+	// kScheduleCheckIntervalMs in OBSBasic_Schedule.cpp) so a 1s delay
+	// here is unnoticeable.
+	QTimer::singleShot(1000, this, &OBSBasic::InitSchedule);
 }
 
 void OBSBasic::OnFirstLoad()
