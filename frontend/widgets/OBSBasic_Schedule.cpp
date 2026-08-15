@@ -34,6 +34,17 @@ constexpr int kScheduleCheckIntervalMs = 5000;
 
 void OBSBasic::InitSchedule()
 {
+	/* Scheduled streaming must always be started manually by the user,
+	 * never automatically by the program. On startup, force the schedule
+	 * switch off (and save) so a schedule left enabled from a previous
+	 * session can't make CheckSchedule() start streaming on its own once
+	 * the first poll runs; the user re-enables it afterwards via the
+	 * "Start/Stop Scheduled Streaming" control-panel button. */
+	if (activeConfiguration) {
+		config_set_bool(activeConfiguration, "Schedule", "Enabled", false);
+		activeConfiguration.SaveSafe("tmp");
+	}
+
 	scheduleTimer = new QTimer(this);
 	connect(scheduleTimer, &QTimer::timeout, this, &OBSBasic::CheckSchedule);
 	scheduleTimer->start(kScheduleCheckIntervalMs);
