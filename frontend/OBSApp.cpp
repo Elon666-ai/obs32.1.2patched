@@ -36,7 +36,6 @@
 #endif
 #include <qt-wrappers.hpp>
 
-#include <QCheckBox>
 #include <QDesktopServices>
 #if defined(_WIN32) || defined(ENABLE_SPARKLE_UPDATER)
 #include <QFile>
@@ -94,48 +93,13 @@ UncleanLaunchAction handleUncleanShutdown(bool enableCrashUpload)
 
 	blog(LOG_WARNING, "Crash or unclean shutdown detected");
 
-	QMessageBox crashWarning;
+	// Fork customization: never ask the user whether to launch in safe
+	// mode - always launch normally, exactly as if they had clicked
+	// "Launch Normal" in the upstream dialog. Crash report upload stays
+	// off (it was only ever opt-in via that same dialog).
+	UNUSED_PARAMETER(enableCrashUpload);
 
-	crashWarning.setIcon(QMessageBox::Warning);
-#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
-	crashWarning.setOption(QMessageBox::Option::DontUseNativeDialog);
-#endif
-	crashWarning.setWindowTitle(QTStr("CrashHandling.Dialog.Title"));
-	crashWarning.setText(QTStr("CrashHandling.Labels.Text"));
-
-	if (enableCrashUpload) {
-		crashWarning.setInformativeText(QTStr("CrashHandling.Labels.PrivacyNotice"));
-
-		QCheckBox *sendCrashReportCheckbox = new QCheckBox(QTStr("CrashHandling.Checkbox.SendReport"));
-		crashWarning.setCheckBox(sendCrashReportCheckbox);
-	}
-
-	QPushButton *launchSafeButton =
-		crashWarning.addButton(QTStr("CrashHandling.Buttons.LaunchSafe"), QMessageBox::AcceptRole);
-	QPushButton *launchNormalButton =
-		crashWarning.addButton(QTStr("CrashHandling.Buttons.LaunchNormal"), QMessageBox::RejectRole);
-
-	crashWarning.setDefaultButton(launchNormalButton);
-
-	crashWarning.exec();
-
-	bool useSafeMode = crashWarning.clickedButton() == launchSafeButton;
-
-	if (useSafeMode) {
-		launchAction.useSafeMode = true;
-
-		blog(LOG_INFO, "[Safe Mode] Safe mode launch selected, loading third-party plugins is disabled");
-	} else {
-		blog(LOG_WARNING, "[Safe Mode] Normal launch selected, loading third-party plugins is enabled");
-	}
-
-	bool sendCrashReport = (enableCrashUpload) ? crashWarning.checkBox()->isChecked() : false;
-
-	if (sendCrashReport) {
-		launchAction.sendCrashReport = true;
-
-		blog(LOG_INFO, "User selected to send crash report");
-	}
+	blog(LOG_WARNING, "[Safe Mode] Normal launch selected, loading third-party plugins is enabled");
 
 	return launchAction;
 }
