@@ -52,8 +52,25 @@ char *find_libobs_data_file(const char *file)
 	struct dstr path;
 	dstr_init(&path);
 
+	/* CWD-relative lookup (upstream behaviour - works when the exe is
+	 * launched with bin/64bit as the working directory). */
 	if (check_path(file, "../../data/libobs/", &path))
 		return path.array;
+
+	/* Exe-relative fallback (fork fix): resolve data/libobs relative to the
+	 * directory containing obs64.exe instead of the process working
+	 * directory. This keeps core data (shader .effect files, etc.)
+	 * discoverable no matter what CWD the exe is launched with, matching the
+	 * exe-relative lookup added to the frontend's GetDataFilePath. */
+	char *exe_relative = os_get_executable_path_ptr("../../data/libobs/");
+	if (exe_relative) {
+		dstr_copy(&path, exe_relative);
+		dstr_cat(&path, file);
+		bfree(exe_relative);
+
+		if (os_file_exists(path.array))
+			return path.array;
+	}
 
 	dstr_free(&path);
 	return NULL;

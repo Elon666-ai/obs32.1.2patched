@@ -37,6 +37,21 @@ using namespace std;
 extern bool portable_mode;
 extern int GetConfigPath(char *path, size_t size, const char *name);
 
+/* FindFirstFileW (which os_file_exists ultimately calls) reports a
+ * directory path as nonexistent when it ends in a separator (e.g.
+ * "C:\\foo\\" fails while "C:\\foo" succeeds). Data lookups are
+ * frequently built with a trailing slash (e.g. GetDataFilePath("themes/",
+ * ...)), so check existence against a copy with any trailing slash/backslash
+ * stripped, while still returning the untrimmed path to the caller. */
+static inline bool path_exists_trimmed(const string &path)
+{
+	size_t end = path.size();
+	while (end > 0 && (path[end - 1] == '/' || path[end - 1] == '\\'))
+		end--;
+
+	return os_file_exists(path.substr(0, end).c_str());
+}
+
 static inline bool check_path(const char *data, const char *path, string &output)
 {
 	ostringstream str;
@@ -45,15 +60,70 @@ static inline bool check_path(const char *data, const char *path, string &output
 
 	blog(LOG_DEBUG, "Attempted path: %s", output.c_str());
 
-	return os_file_exists(output.c_str());
+	return path_exists_trimmed(output);
+}
+
+/* Same as check_path, but resolves relpath/data against the directory of the
+ * running executable instead of the process working directory. This makes
+ * data lookups independent of the CWD, so launching obs64.exe from anywhere
+ * (shell with a different working dir, etc.) still finds data/obs-studio. */
+static inline bool check_exe_dir_path(const char *data, const char *relpath, string &output)
+{
+	wchar_t exePath[MAX_PATH];
+	DWORD len = GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+	if (len == 0 || len >= MAX_PATH)
+		return false;
+
+	wchar_t *lastSep = wcsrchr(exePath, L'\\');
+	if (!lastSep)
+		return false;
+	*lastSep = L'\0'; /* keep the exe's directory, drop the file name */
+
+	std::wstring full = exePath;
+	full += L'\\';
+
+	/* relpath/data use forward slashes; convert for a valid Windows path. */
+	auto appendPath = [&full](const char *s) {
+		for (; *s; s++)
+			full += (*s == '/') ? L'\\' : (wchar_t)(unsigned char)*s;
+	};
+
+	appendPath(relpath);
+	appendPath(data);
+
+	char *utf8 = nullptr;
+	if (!os_wcs_to_utf8_ptr(full.c_str(), 0, &utf8))
+		return false;
+
+	output = utf8;
+	bfree(utf8);
+
+	blog(LOG_DEBUG, "Attempted path: %s", output.c_str());
+
+	return path_exists_trimmed(output);
 }
 
 bool GetDataFilePath(const char *data, string &output)
 {
+	/* CWD-relative lookups (upstream behaviour - works when the exe is
+	 * launched with bin/64bit as the working directory). */
 	if (check_path(data, "data/obs-studio/", output))
 		return true;
 
-	return check_path(data, OBS_DATA_PATH "/obs-studio/", output);
+	if (check_path(data, OBS_DATA_PATH "/obs-studio/", output))
+		return true;
+
+	/* Exe-relative lookups (fork fix): the exe lives in bin/64bit and the
+	 * data dir sits two levels up at <root>/data/obs-studio (OBS_DATA_PATH
+	 * = "../../data"), but also try a data/ dir next to the exe in case of
+	 * other layouts. Independent of the process working directory. */
+	if (check_exe_dir_path(data, OBS_DATA_PATH "/obs-studio/", output))
+		return true;
+
+	if (check_exe_dir_path(data, "data/obs-studio/", output))
+		return true;
+
+	return false;
 }
 
 string GetDefaultVideoSavePath()
