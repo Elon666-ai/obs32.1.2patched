@@ -641,8 +641,23 @@ bool WHIPOutput::Connect(uint64_t generation, std::string &attemptResourceURL)
 	if (response_code != 201) {
 		do_log(LOG_ERROR, "Connect failed: HTTP endpoint returned response code %ld", response_code);
 		doCleanup(false);
-		if (IsActiveGeneration(generation))
-			obs_output_signal_stop(output, OBS_OUTPUT_DISCONNECTED);
+		if (IsActiveGeneration(generation)) {
+			// 401/403/404 mean the server rejected this specific
+			// stream (bad key/path/permissions, e.g. mmx's
+			// publish whitelist) rather than a transient network
+			// problem - retrying on libobs's reconnect timer will
+			// just get the identical rejection every time. Signal
+			// OBS_OUTPUT_INVALID_STREAM (not reconnectable, see
+			// can_reconnect() in libobs/obs-output.c) so the user
+			// gets a clear "invalid stream key/path" dialog and
+			// streaming actually stops, instead of retrying
+			// forever with no visible error (as OBS_OUTPUT_
+			// DISCONNECTED would do). Other codes (5xx, etc.) keep
+			// the existing reconnectable behavior.
+			bool permanent = response_code == 401 || response_code == 403 || response_code == 404;
+			obs_output_signal_stop(output, permanent ? OBS_OUTPUT_INVALID_STREAM
+								  : OBS_OUTPUT_DISCONNECTED);
+		}
 		return false;
 	}
 
