@@ -854,32 +854,6 @@ static bool vc_runtime_outdated()
 #define ALLOW_PORTABLE_MODE 0
 #endif
 
-#if ALLOW_PORTABLE_MODE
-/* Check for a marker file (portable_mode, disable_updater, etc.) both relative
- * to the process working directory (BASE_PATH, upstream behaviour) and relative
- * to the directory containing the executable (fork fix). Checking exe-relative
- * as well makes portable-mode/marker detection independent of the CWD, matching
- * the exe-relative data lookups in the frontend GetDataFilePath and libobs
- * find_libobs_data_file, so launching obs64.exe from any working directory
- * behaves consistently. */
-static bool marker_file_exists(const char *name)
-{
-	std::string relative = std::string(BASE_PATH "/") + name;
-	if (os_file_exists(relative.c_str()))
-		return true;
-
-	char *exe_relative = os_get_executable_path_ptr((std::string(BASE_PATH "/") + name).c_str());
-	if (exe_relative) {
-		bool found = os_file_exists(exe_relative);
-		bfree(exe_relative);
-		if (found)
-			return true;
-	}
-
-	return false;
-}
-#endif
-
 int main(int argc, char *argv[])
 {
 #ifndef _WIN32
@@ -1058,19 +1032,20 @@ int main(int argc, char *argv[])
 
 #if ALLOW_PORTABLE_MODE
 	if (!portable_mode) {
-		portable_mode = marker_file_exists("portable_mode") || marker_file_exists("obs_portable_mode") ||
-				marker_file_exists("portable_mode.txt") ||
-				marker_file_exists("obs_portable_mode.txt");
+		portable_mode = os_file_exists(BASE_PATH "/portable_mode") ||
+				os_file_exists(BASE_PATH "/obs_portable_mode") ||
+				os_file_exists(BASE_PATH "/portable_mode.txt") ||
+				os_file_exists(BASE_PATH "/obs_portable_mode.txt");
 	}
 
 	if (!opt_disable_updater) {
-		opt_disable_updater =
-			marker_file_exists("disable_updater") || marker_file_exists("disable_updater.txt");
+		opt_disable_updater = os_file_exists(BASE_PATH "/disable_updater") ||
+				      os_file_exists(BASE_PATH "/disable_updater.txt");
 	}
 
 	if (!opt_disable_missing_files_check) {
-		opt_disable_missing_files_check = marker_file_exists("disable_missing_files_check") ||
-						  marker_file_exists("disable_missing_files_check.txt");
+		opt_disable_missing_files_check = os_file_exists(BASE_PATH "/disable_missing_files_check") ||
+						  os_file_exists(BASE_PATH "/disable_missing_files_check.txt");
 	}
 #endif
 
