@@ -1638,39 +1638,15 @@ vector<pair<string, string>> GetLocaleNames()
 #define ALLOW_PORTABLE_MODE 0
 #endif
 
-#if ALLOW_PORTABLE_MODE
-/* Resolve the portable config directory relative to the executable's location
- * instead of the process working directory (fork fix). CONFIG_PATH is
- * CWD-relative ("../../config"); anchoring it to the exe directory keeps the
- * portable config/logs in <root>/config no matter what CWD obs64.exe is
- * launched with, matching the exe-relative data + marker lookups elsewhere in
- * this fork. Returns a bfree-able string, or nullptr on failure. */
-static char *GetPortableConfigPathPtr(const char *name)
-{
-	char *base = os_get_executable_path_ptr(CONFIG_PATH);
-	if (!base)
-		return nullptr;
-
-	std::string full = base;
-	bfree(base);
-
-	if (name && *name) {
-		full += "/";
-		full += name;
-	}
-
-	return bstrdup(full.c_str());
-}
-#endif
-
 int GetAppConfigPath(char *path, size_t size, const char *name)
 {
 #if ALLOW_PORTABLE_MODE
 	if (portable_mode) {
-		char *full = GetPortableConfigPathPtr(name);
-		int ret = full ? snprintf(path, size, "%s", full) : -1;
-		bfree(full);
-		return ret;
+		if (name && *name) {
+			return snprintf(path, size, CONFIG_PATH "/%s", name);
+		} else {
+			return snprintf(path, size, CONFIG_PATH);
+		}
 	} else {
 		return os_get_config_path(path, size, name);
 	}
@@ -1683,7 +1659,13 @@ char *GetAppConfigPathPtr(const char *name)
 {
 #if ALLOW_PORTABLE_MODE
 	if (portable_mode) {
-		return GetPortableConfigPathPtr(name);
+		char path[512];
+
+		if (snprintf(path, sizeof(path), CONFIG_PATH "/%s", name) > 0) {
+			return bstrdup(path);
+		} else {
+			return NULL;
+		}
 	} else {
 		return os_get_config_path_ptr(name);
 	}
