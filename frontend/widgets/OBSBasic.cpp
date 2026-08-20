@@ -807,6 +807,8 @@ bool OBSBasic::InitBasicConfigDefaults()
 	config_set_default_bool(activeConfiguration, "Output", "DelayPreserve", true);
 
 	config_set_default_bool(activeConfiguration, "Output", "Reconnect", true);
+	config_set_default_uint(activeConfiguration, "Output", "WhipDisconnectGraceSec", 10);
+	config_set_default_uint(activeConfiguration, "Output", "WhipReconnectBackoffSec", 3);
 	config_set_default_uint(activeConfiguration, "Output", "RetryDelay", 2);
 	config_set_default_uint(activeConfiguration, "Output", "MaxRetries", 25);
 

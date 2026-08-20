@@ -53,6 +53,7 @@ private:
 	bool IsActiveGeneration(uint64_t generation) const;
 	void MarkDisconnected();
 	void MarkConnected();
+	void PrepareReconnect();
 	bool ShouldFallback(const std::string &backup_url);
 	void StartDisconnectGraceTimer(uint64_t generation);
 	void CancelDisconnectGraceTimer();
@@ -119,6 +120,9 @@ private:
 	std::atomic<bool> using_backup{false};
 	std::atomic<int64_t> fail_since_ns{0};
 	std::atomic<bool> fail_since_set{false};
+	std::atomic<int> reconnect_attempt{0};
+	int disconnect_grace_sec = 10;
+	int reconnect_backoff_sec = 3;
 
 	// Grace period before a PeerConnection "Disconnected" state is
 	// treated as a real failure (see docs on WHIP_DISCONNECT_GRACE_SEC
