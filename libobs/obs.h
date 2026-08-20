@@ -2067,6 +2067,7 @@ EXPORT obs_service_t *obs_output_get_service(const obs_output_t *output);
  * Sets the reconnect settings.  Set retry_count to 0 to disable reconnecting.
  */
 EXPORT void obs_output_set_reconnect_settings(obs_output_t *output, int retry_count, int retry_sec);
+EXPORT void obs_output_set_reconnect_delay(obs_output_t *output, uint32_t delay_ms);
 
 EXPORT uint64_t obs_output_get_total_bytes(const obs_output_t *output);
 EXPORT int obs_output_get_frames_dropped(const obs_output_t *output);
