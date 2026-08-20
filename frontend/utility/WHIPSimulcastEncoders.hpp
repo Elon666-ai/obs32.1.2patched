@@ -26,13 +26,18 @@
 // is never covered by this - it's always the main Stream encoder's own,
 // unscaled output.
 struct WHIPSimulcastLayer {
-	// If true, width/height below are meaningless - the caller should
-	// use its own halve-per-slot resolution formula against the main
-	// output's *current* resolution instead, so this layer stays in
-	// proportion to layer 0 even after layer 0's resolution changes
-	// (see the "WHIPSimulcastLayer<N>FollowMain" config key, which
-	// defaults to true when absent - see the Update()/Create() call
-	// sites below for why absence must mean "follow").
+	// If true, width/height/bitrateKbps below are all meaningless - the
+	// caller should recompute every one of them live against the main
+	// output's *current* resolution/bitrate instead (see
+	// WHIPSimulcastEncoders::Create()'s fallback formula and
+	// WHIPSimulcastProportionalBitrate()), so this layer stays in
+	// proportion to layer 0 even after layer 0's resolution/bitrate
+	// changes (see the "WHIPSimulcastLayer<N>FollowMain" config key,
+	// which defaults to true when absent - see the Update()/Create()
+	// call sites below for why absence must mean "follow"). Width/
+	// height/bitrateKbps are only ever saved (and only ever meaningful)
+	// once the user has explicitly unchecked Follow Main for this row -
+	// see SaveStream1Settings() in OBSBasicSettings_Stream.cpp.
 	bool followMain;
 	uint32_t width;
 	uint32_t height;
@@ -47,6 +52,23 @@ struct WHIPSimulcastLayer {
 // (e.g. this row was never touched, or config predates this per-layer
 // UI), leaving *layer unmodified so the caller can fall back to the
 // halve-per-slot formula for it entirely (both resolution and bitrate).
+// Scales mainBitrate down by this layer's actual pixel-area ratio against
+// the main output's resolution (width*height / mainWidth*mainHeight) - so a
+// layer at 50%/50% of the main resolution (25% of its pixel count) gets 25%
+// of its bitrate, whatever the resolution ladder used to arrive at that
+// layer's width/height actually is (currently an even step-down, not a
+// per-layer halving - see WHIPSimulcastEncoders::Create()). Clamped to at
+// least 1 Kbps since most encoders reject/misbehave on a bitrate of 0.
+static inline int64_t WHIPSimulcastProportionalBitrate(int mainBitrate, uint32_t mainWidth, uint32_t mainHeight,
+							uint32_t layerWidth, uint32_t layerHeight)
+{
+	if (mainWidth == 0 || mainHeight == 0)
+		return mainBitrate > 0 ? mainBitrate : 1;
+
+	int64_t bitrate = (int64_t)mainBitrate * layerWidth * layerHeight / ((int64_t)mainWidth * mainHeight);
+	return bitrate > 0 ? bitrate : 1;
+}
+
 static inline bool GetWHIPSimulcastLayerConfig(config_t *config, int layerNum, WHIPSimulcastLayer *layer)
 {
 	std::string prefix = "WHIPSimulcastLayer" + std::to_string(layerNum);
@@ -135,16 +157,18 @@ public:
 
 			if (videoSettings) {
 				layerSettings = obs_data_create_from_json(obs_data_get_json(videoSettings));
-				if (haveCustom) {
+				if (haveCustom && !custom.followMain) {
 					obs_data_set_int(layerSettings, "bitrate", custom.bitrateKbps);
 				} else {
-					// halve per slot below the top layer
-					// (slot=1 -> 1/2, slot=2 -> 1/4, ...)
-					// rather than an equal step-down, so
-					// bitrate scales with resolution
-					// (halved on each axis => quartered
-					// pixel count per step).
-					obs_data_set_int(layerSettings, "bitrate", videoBitrate >> slot);
+					// Proportional to this layer's actual
+					// pixel-area ratio against the main
+					// output's resolution - see
+					// WHIPSimulcastProportionalBitrate()
+					// above.
+					obs_data_set_int(layerSettings, "bitrate",
+							  WHIPSimulcastProportionalBitrate(
+								  videoBitrate, outputWidth, outputHeight, width,
+								  height));
 				}
 			}
 
@@ -171,6 +195,9 @@ public:
 	// main encoder's own bitrate change already is.
 	void Update(obs_data_t *videoSettings, int videoBitrate, config_t *config = nullptr)
 	{
+		uint32_t outputWidth = video_output_get_width(obs_get_video());
+		uint32_t outputHeight = video_output_get_height(obs_get_video());
+
 		for (size_t idx = 0; idx < whipSimulcastEncoders.size(); idx++) {
 			OBSDataAutoRelease layerSettings = obs_data_create_from_json(obs_data_get_json(videoSettings));
 
@@ -180,12 +207,21 @@ public:
 			// order this loop walks forward through.
 			WHIPSimulcastLayer custom;
 			int slot = static_cast<int>(idx) + 1;
-			if (GetWHIPSimulcastLayerConfig(config, slot, &custom)) {
+			if (GetWHIPSimulcastLayerConfig(config, slot, &custom) && !custom.followMain) {
 				obs_data_set_int(layerSettings, "bitrate", custom.bitrateKbps);
 			} else {
-				// halve per slot below the top layer, same
-				// as Create()'s fallback formula.
-				obs_data_set_int(layerSettings, "bitrate", videoBitrate >> slot);
+				// Same proportional-to-pixel-area formula as
+				// Create()'s fallback, using this encoder's
+				// *current* scaled size (obs_encoder_get_width/
+				// height reflect whatever
+				// obs_encoder_set_scaled_size last set it to in
+				// Create() - Update() itself never changes it).
+				uint32_t layerWidth = obs_encoder_get_width(whipSimulcastEncoders[idx]);
+				uint32_t layerHeight = obs_encoder_get_height(whipSimulcastEncoders[idx]);
+				obs_data_set_int(layerSettings, "bitrate",
+						  WHIPSimulcastProportionalBitrate(videoBitrate, outputWidth,
+										    outputHeight, layerWidth,
+										    layerHeight));
 			}
 
 			obs_encoder_update(whipSimulcastEncoders[idx], layerSettings);

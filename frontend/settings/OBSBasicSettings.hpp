@@ -245,6 +245,9 @@ private:
 	std::vector<WHIPSimulcastLayerRow> whipSimulcastLayerRows;
 	void RebuildWHIPSimulcastLayerRows();
 	void WHIPSimulcastLayerFollowMainToggled(size_t layerIdx, bool checked);
+	void RefreshWHIPSimulcastLayerDefault(size_t layerIdx);
+	void RefreshWHIPSimulcastFollowingLayers();
+	void GetWHIPSimulcastMainResolution(uint32_t &width, uint32_t &height);
 
 	void ServiceChanged(bool resetFields = false);
 	QString FindProtocol();

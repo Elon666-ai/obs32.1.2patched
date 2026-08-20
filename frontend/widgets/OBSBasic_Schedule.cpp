@@ -131,27 +131,49 @@ void OBSBasic::CheckSchedule()
 	int dayIdx = now.date().dayOfWeek() - 1; // Qt: 1=Monday -> 0-based
 	if (dayIdx < 0 || dayIdx > 6)
 		return;
+	int prevDayIdx = (dayIdx + 6) % 7;
 
 	int nowMinutes = now.time().hour() * 60 + now.time().minute();
 	std::string dayKey = kScheduleDayKeys[dayIdx];
+	std::string prevDayKey = kScheduleDayKeys[prevDayIdx];
 
 	/* Streaming should be active if *any* slot covers the current weekday
-	 * and time - slots are validated not to overlap on the same day at
-	 * save time (see OBSBasicSettings::ValidateScheduleSlots), so at most
-	 * one can ever match, but this doesn't rely on that. */
+	 * and time - slots are validated not to overlap at save time (see
+	 * OBSBasicSettings::ValidateScheduleSlots), so at most one can ever
+	 * match, but this doesn't rely on that.
+	 *
+	 * A slot whose End is at or before its Start wraps past midnight (e.g.
+	 * 22:00-06:00, or a same-value Start/End wrapping to the full day):
+	 * the portion from Start to midnight belongs to the day the slot's
+	 * own weekday checkbox is set for, while the portion from midnight to
+	 * End belongs to the *next* calendar day - so evaluating that tail
+	 * today means checking *yesterday's* checkbox for this same slot, not
+	 * today's (see OBSBasicSettings_Schedule.cpp's ExpandSlotRanges(),
+	 * which the overlap validator expands the same way). */
 	bool shouldBeStreaming = false;
 	int slotCount = (int)config_get_int(activeConfiguration, "Schedule", "Slot.Count");
 	for (int i = 0; i < slotCount && !shouldBeStreaming; i++) {
 		std::string prefix = "Slot" + std::to_string(i) + ".";
 
-		bool dayEnabled = config_get_bool(activeConfiguration, "Schedule", (prefix + "Day." + dayKey).c_str());
-		if (!dayEnabled)
-			continue;
-
 		int startMinutes = (int)config_get_int(activeConfiguration, "Schedule", (prefix + "Start").c_str());
 		int endMinutes = (int)config_get_int(activeConfiguration, "Schedule", (prefix + "End").c_str());
 
-		shouldBeStreaming = nowMinutes >= startMinutes && nowMinutes < endMinutes;
+		if (endMinutes > startMinutes) {
+			bool dayEnabled =
+				config_get_bool(activeConfiguration, "Schedule", (prefix + "Day." + dayKey).c_str());
+			shouldBeStreaming = dayEnabled && nowMinutes >= startMinutes && nowMinutes < endMinutes;
+			continue;
+		}
+
+		bool todayEnabled = config_get_bool(activeConfiguration, "Schedule", (prefix + "Day." + dayKey).c_str());
+		if (todayEnabled && nowMinutes >= startMinutes) {
+			shouldBeStreaming = true;
+			continue;
+		}
+
+		bool yesterdayEnabled =
+			config_get_bool(activeConfiguration, "Schedule", (prefix + "Day." + prevDayKey).c_str());
+		shouldBeStreaming = yesterdayEnabled && nowMinutes < endMinutes;
 	}
 
 	scheduleStreamActive = shouldBeStreaming;

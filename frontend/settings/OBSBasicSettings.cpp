@@ -109,6 +109,31 @@ static bool ConvertResText(const char *res, uint32_t &cx, uint32_t &cy)
 	return true;
 }
 
+// The resolution WHIP Simulcast layers following the main output should
+// currently be sized against. Prefers whatever is *typed* into the Video
+// page's Output (Scaled) Resolution field over the actually-applied
+// video_output_get_width/height(obs_get_video()) - the latter only changes
+// once Apply/OK on the Video page runs main->ResetVideo(), while a user
+// switching straight from Video to Stream (or just watching the Stream
+// page as they type into Video) reasonably expects the simulcast preview
+// to track what they just typed, not what's still active from before this
+// dialog was opened. Falls back to the applied resolution when the field
+// doesn't parse (e.g. mid-edit, or the Video page was never touched this
+// session).
+void OBSBasicSettings::GetWHIPSimulcastMainResolution(uint32_t &width, uint32_t &height)
+{
+	uint32_t cx = 0, cy = 0;
+	if (ui->outputResolution && ConvertResText(QT_TO_UTF8(ui->outputResolution->currentText()), cx, cy) && cx &&
+	    cy) {
+		width = cx;
+		height = cy;
+		return;
+	}
+
+	width = video_output_get_width(obs_get_video());
+	height = video_output_get_height(obs_get_video());
+}
+
 static inline bool WidgetChanged(QWidget *widget)
 {
 	return widget->property("changed").toBool();
@@ -3682,8 +3707,26 @@ void OBSBasicSettings::SaveSettings()
 		SaveAppearanceSettings();
 	if (scheduleChanged)
 		SaveScheduleSettings();
-	if (videoChanged || advancedChanged)
+	if (videoChanged || advancedChanged) {
 		main->ResetVideo();
+
+		// WHIP Simulcast layer rows that are still following the main
+		// output prefill their width/height/bitrate from the main
+		// output's *current* resolution/bitrate (see
+		// RefreshWHIPSimulcastFollowingLayers) - refresh them now that
+		// ResetVideo() above may have just changed what "current"
+		// means, so the Stream tab doesn't keep showing numbers from
+		// before this Apply/OK until the dialog is closed and
+		// reopened. This is *not* a full RebuildWHIPSimulcastLayerRows -
+		// SaveStream1Settings() already ran above, so config matches
+		// these widgets already, but rebuilding would still be the
+		// wrong tool here (see RefreshWHIPSimulcastFollowingLayers's
+		// comment). Guarded by loading so this doesn't itself flip
+		// stream1Changed and re-enable Apply right after a save.
+		loading = true;
+		RefreshWHIPSimulcastFollowingLayers();
+		loading = false;
+	}
 
 	config_save_safe(main->Config(), "tmp", nullptr);
 	config_save_safe(App()->GetUserConfig(), "tmp", nullptr);
@@ -3837,6 +3880,30 @@ void OBSBasicSettings::on_listWidget_itemSelectionChanged()
 
 	if (loading || row == pageIndex)
 		return;
+
+	if (row == Pages::STREAM) {
+		// WHIP Simulcast layer rows following the main output prefill
+		// from GetWHIPSimulcastMainResolution(), which prefers
+		// whatever's currently typed into the Video page's Output
+		// Resolution field - refresh them on entry so switching over
+		// from Video (with or without having applied it yet) shows
+		// the layers sized against what's on screen right now,
+		// instead of whatever was current the last time this page
+		// was built.
+		//
+		// This must be RefreshWHIPSimulcastFollowingLayers(), not a
+		// full RebuildWHIPSimulcastLayerRows() - a rebuild tears down
+		// and recreates every row from *saved config*, which silently
+		// discards any not-yet-applied edit sitting in these widgets
+		// (e.g. the user just checked Follow Main, or typed a custom
+		// width, then switched pages and back before clicking Apply).
+		// Guarded by loading so this doesn't itself flip
+		// stream1Changed and light up Apply just from looking at the
+		// page.
+		loading = true;
+		RefreshWHIPSimulcastFollowingLayers();
+		loading = false;
+	}
 
 	if (!hotkeysLoaded && row == Pages::HOTKEYS) {
 		setCursor(Qt::BusyCursor);
