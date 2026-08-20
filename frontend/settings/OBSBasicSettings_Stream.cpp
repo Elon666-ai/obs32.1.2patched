@@ -8,7 +8,9 @@
 #include <utility/YoutubeApiWrappers.hpp>
 #endif
 #include <widgets/OBSBasic.hpp>
+#include <utility/WHIPSimulcastEncoders.hpp>
 
+#include <properties-view.hpp>
 #include <qt-wrappers.hpp>
 
 #include <QCheckBox>
@@ -376,14 +378,32 @@ void OBSBasicSettings::SaveStream1Settings()
 		auto oldHeight = config_get_int(main->Config(), "Stream1", (prefix + "Height").c_str());
 		auto oldBitrate = config_get_int(main->Config(), "Stream1", (prefix + "BitrateKbps").c_str());
 
-		if (oldFollowMain != followMain || oldBitrate != row.bitrate->value() ||
-		    (!followMain && (oldWidth != row.width->value() || oldHeight != row.height->value())))
+		if (oldFollowMain != followMain ||
+		    (!followMain && (oldWidth != row.width->value() || oldHeight != row.height->value() ||
+				     oldBitrate != row.bitrate->value())))
 			whipLayerSettingsChanged = true;
 
 		config_set_bool(main->Config(), "Stream1", (prefix + "FollowMain").c_str(), followMain);
-		config_set_int(main->Config(), "Stream1", (prefix + "Width").c_str(), row.width->value());
-		config_set_int(main->Config(), "Stream1", (prefix + "Height").c_str(), row.height->value());
-		config_set_int(main->Config(), "Stream1", (prefix + "BitrateKbps").c_str(), row.bitrate->value());
+
+		// Width/Height/BitrateKbps must only ever be written while
+		// they're the user's own explicit choice (FollowMain
+		// unchecked) - saving them unconditionally here, even while
+		// following, would leave a "user value" behind that
+		// GetWHIPSimulcastLayerConfig()/RebuildWHIPSimulcastLayerRows()
+		// would then read back as a locked-in override on the *next*
+		// load, freezing this row at whatever the main output's
+		// resolution/bitrate happened to be at this Apply instead of
+		// live-tracking it as FollowMain promises.
+		if (followMain) {
+			config_remove_value(main->Config(), "Stream1", (prefix + "Width").c_str());
+			config_remove_value(main->Config(), "Stream1", (prefix + "Height").c_str());
+			config_remove_value(main->Config(), "Stream1", (prefix + "BitrateKbps").c_str());
+		} else {
+			config_set_int(main->Config(), "Stream1", (prefix + "Width").c_str(), row.width->value());
+			config_set_int(main->Config(), "Stream1", (prefix + "Height").c_str(), row.height->value());
+			config_set_int(main->Config(), "Stream1", (prefix + "BitrateKbps").c_str(),
+					row.bitrate->value());
+		}
 	}
 
 	auto oldMultitrackVideoSetting = config_get_bool(main->Config(), "Stream1", "EnableMultitrackVideo");
@@ -451,15 +471,30 @@ void OBSBasicSettings::RebuildWHIPSimulcastLayerRows()
 	// WHIPSimulcastEncoders.hpp) - used only to prefill a row the first
 	// time it's created (no saved config value yet), so a user who
 	// never touches these fields gets the same ladder the encoders
-	// themselves would fall back to. Resolution steps down evenly;
-	// bitrate halves per layer (layer 1 = mainBitrate/2, layer 2 =
-	// mainBitrate/4, ...), matching that layers's halved-per-axis
-	// (i.e. quartered pixel count) resolution.
-	uint32_t outputWidth = video_output_get_width(obs_get_video());
-	uint32_t outputHeight = video_output_get_height(obs_get_video());
-	int mainBitrate = ui->simpleOutputVBitrate->value();
+	// themselves would fall back to. Resolution steps down evenly across
+	// layers; bitrate is proportional to each layer's resulting
+	// pixel-area ratio against the main output (see
+	// WHIPSimulcastProportionalBitrate()).
+	uint32_t outputWidth, outputHeight;
+	GetWHIPSimulcastMainResolution(outputWidth, outputHeight);
+
+	// mainBitrate must reflect whichever output mode is actually active -
+	// simpleOutputVBitrate only holds a real value when Simple mode is
+	// selected; in Advanced mode the video bitrate lives in the stream
+	// encoder's own properties (streamEncoderProps), keyed the same
+	// "bitrate" way every built-in video encoder exposes it. Reading the
+	// wrong one silently prefilled layers off of whatever
+	// simpleOutputVBitrate happened to contain (its own default, or a
+	// value from a mode the user isn't even using) instead of the
+	// bitrate they actually configured.
+	bool simpleOutputMode = (ui->outputMode->currentIndex() == 0);
+	int mainBitrate = simpleOutputMode ? ui->simpleOutputVBitrate->value()
+					    : (streamEncoderProps
+						       ? (int)obs_data_get_int(streamEncoderProps->GetSettings(),
+										"bitrate")
+						       : 0);
 	if (mainBitrate <= 0)
-		mainBitrate = 2500; // sane fallback if Simple output settings haven't loaded yet
+		mainBitrate = 2500; // sane fallback if settings haven't loaded yet
 
 	for (int layer = 1; layer < totalLayers; layer++) {
 		std::string prefix = "WHIPSimulcastLayer" + std::to_string(layer);
@@ -468,7 +503,8 @@ void OBSBasicSettings::RebuildWHIPSimulcastLayerRows()
 		defaultWidth -= defaultWidth % 2;
 		uint32_t defaultHeight = (outputHeight / totalLayers) * (totalLayers - layer);
 		defaultHeight -= defaultHeight % 2;
-		int defaultBitrate = mainBitrate >> layer;
+		int defaultBitrate = (int)WHIPSimulcastProportionalBitrate(mainBitrate, outputWidth, outputHeight,
+									    defaultWidth, defaultHeight);
 
 		// Absence of a saved value (row never touched, or config
 		// predates this option) defaults to following the main
@@ -491,11 +527,17 @@ void OBSBasicSettings::RebuildWHIPSimulcastLayerRows()
 		followMainCheck->setChecked(followMain);
 		rowLayout->addWidget(followMainCheck);
 
+		// While following, width/height/bitrate always show the live-
+		// computed default regardless of what (if anything) is saved -
+		// only an explicit, unchecked-FollowMain customization should
+		// ever read back a saved value here (SaveStream1Settings()
+		// only ever *writes* one in that case too, but this stays
+		// defensive against configs saved before that was true).
 		auto *width = new QSpinBox(rowWidget);
 		width->setRange(2, 7680);
 		width->setSingleStep(2);
 		width->setSuffix(" px");
-		width->setValue(config_has_user_value(main->Config(), "Stream1", (prefix + "Width").c_str())
+		width->setValue(!followMain && config_has_user_value(main->Config(), "Stream1", (prefix + "Width").c_str())
 					 ? config_get_int(main->Config(), "Stream1", (prefix + "Width").c_str())
 					 : defaultWidth);
 		width->setEnabled(!followMain);
@@ -508,9 +550,10 @@ void OBSBasicSettings::RebuildWHIPSimulcastLayerRows()
 		height->setRange(2, 7680);
 		height->setSingleStep(2);
 		height->setSuffix(" px");
-		height->setValue(config_has_user_value(main->Config(), "Stream1", (prefix + "Height").c_str())
-					  ? config_get_int(main->Config(), "Stream1", (prefix + "Height").c_str())
-					  : defaultHeight);
+		height->setValue(!followMain &&
+					  config_has_user_value(main->Config(), "Stream1", (prefix + "Height").c_str())
+				  ? config_get_int(main->Config(), "Stream1", (prefix + "Height").c_str())
+				  : defaultHeight);
 		height->setEnabled(!followMain);
 		rowLayout->addWidget(height);
 
@@ -518,9 +561,11 @@ void OBSBasicSettings::RebuildWHIPSimulcastLayerRows()
 		bitrate->setRange(1, 1000000);
 		bitrate->setSingleStep(50);
 		bitrate->setSuffix(" Kbps");
-		bitrate->setValue(config_has_user_value(main->Config(), "Stream1", (prefix + "BitrateKbps").c_str())
+		bitrate->setValue(!followMain && config_has_user_value(main->Config(), "Stream1",
+									 (prefix + "BitrateKbps").c_str())
 					   ? config_get_int(main->Config(), "Stream1", (prefix + "BitrateKbps").c_str())
 					   : defaultBitrate);
+		bitrate->setEnabled(!followMain);
 		rowLayout->addWidget(bitrate);
 
 		size_t layerIdx = whipSimulcastLayerRows.size();
@@ -536,12 +581,73 @@ void OBSBasicSettings::RebuildWHIPSimulcastLayerRows()
 	}
 }
 
-// Enables/disables a layer row's width/height spinboxes when its "Follow
-// Main" checkbox is toggled, and - when re-checking it - snaps
-// width/height back to the live halve-per-slot default against the main
-// output's *current* resolution (rather than leaving stale locked-in
-// values sitting in the now-disabled fields), matching what
-// WHIPSimulcastEncoders::Create() would compute for this slot.
+// Recomputes and displays layer layerIdx's live default width/height/bitrate
+// against the main output's *current* resolution/bitrate, the same formula
+// RebuildWHIPSimulcastLayerRows() prefills a fresh row with. Does *not*
+// touch the FollowMain checkbox or any other row - callers decide which
+// rows are following and thus eligible to be refreshed this way.
+void OBSBasicSettings::RefreshWHIPSimulcastLayerDefault(size_t layerIdx)
+{
+	if (layerIdx >= whipSimulcastLayerRows.size())
+		return;
+
+	const auto &row = whipSimulcastLayerRows[layerIdx];
+
+	int totalLayers = ui->whipSimulcastTotalLayers->value();
+	// row i was pushed for "layer" = i+1 in RebuildWHIPSimulcastLayerRows's
+	// loop, whose formula's multiplier is (totalLayers - layer).
+	int layer = static_cast<int>(layerIdx) + 1;
+	int multiplier = totalLayers - layer;
+	uint32_t outputWidth, outputHeight;
+	GetWHIPSimulcastMainResolution(outputWidth, outputHeight);
+
+	uint32_t defaultWidth = (outputWidth / totalLayers) * multiplier;
+	defaultWidth -= defaultWidth % 2;
+	uint32_t defaultHeight = (outputHeight / totalLayers) * multiplier;
+	defaultHeight -= defaultHeight % 2;
+
+	// Same mode-aware mainBitrate source as RebuildWHIPSimulcastLayerRows()
+	// - see its comment for why simpleOutputVBitrate alone isn't enough.
+	bool simpleOutputMode = (ui->outputMode->currentIndex() == 0);
+	int mainBitrate = simpleOutputMode
+				   ? ui->simpleOutputVBitrate->value()
+				   : (streamEncoderProps
+					      ? (int)obs_data_get_int(streamEncoderProps->GetSettings(), "bitrate")
+					      : 0);
+	if (mainBitrate <= 0)
+		mainBitrate = 2500;
+
+	row.width->setValue(defaultWidth);
+	row.height->setValue(defaultHeight);
+	row.bitrate->setValue((int)WHIPSimulcastProportionalBitrate(mainBitrate, outputWidth, outputHeight,
+								      defaultWidth, defaultHeight));
+}
+
+// Refreshes every row still following the main output in place - unlike
+// RebuildWHIPSimulcastLayerRows(), this never tears down/recreates the row
+// widgets, so it never re-reads FollowMain (or a custom row's width/height/
+// bitrate) back from saved config. That distinction matters because those
+// checkbox/spinbox states can be *unsaved* UI-only edits at the point this
+// runs (e.g. the user just checked Follow Main but hasn't clicked Apply
+// yet) - rebuilding from config would silently discard them. Safe to call
+// whenever the main output's resolution/bitrate may have changed (entering
+// the Stream page, or right after Apply/OK resets video - see call sites).
+void OBSBasicSettings::RefreshWHIPSimulcastFollowingLayers()
+{
+	for (size_t i = 0; i < whipSimulcastLayerRows.size(); i++) {
+		if (whipSimulcastLayerRows[i].followMain->isChecked())
+			RefreshWHIPSimulcastLayerDefault(i);
+	}
+}
+
+// Enables/disables a layer row's width/height/bitrate spinboxes when its
+// "Follow Main" checkbox is toggled, and - when re-checking it - snaps all
+// three back to the live default against the main output's *current*
+// resolution/bitrate (rather than leaving stale locked-in values sitting in
+// the now-disabled fields), matching what WHIPSimulcastEncoders::Create()
+// would compute for this slot. SaveStream1Settings() only persists these
+// fields at all while unchecked, so this is also what keeps a
+// still-checked row live instead of freezing at whatever it last showed.
 void OBSBasicSettings::WHIPSimulcastLayerFollowMainToggled(size_t layerIdx, bool checked)
 {
 	if (layerIdx >= whipSimulcastLayerRows.size())
@@ -550,24 +656,10 @@ void OBSBasicSettings::WHIPSimulcastLayerFollowMainToggled(size_t layerIdx, bool
 	const auto &row = whipSimulcastLayerRows[layerIdx];
 	row.width->setEnabled(!checked);
 	row.height->setEnabled(!checked);
+	row.bitrate->setEnabled(!checked);
 
-	if (checked) {
-		int totalLayers = ui->whipSimulcastTotalLayers->value();
-		// row i was pushed for "layer" = i+1 in RebuildWHIPSimulcastLayerRows's
-		// loop, whose formula's multiplier is (totalLayers - layer).
-		int layer = static_cast<int>(layerIdx) + 1;
-		int multiplier = totalLayers - layer;
-		uint32_t outputWidth = video_output_get_width(obs_get_video());
-		uint32_t outputHeight = video_output_get_height(obs_get_video());
-
-		uint32_t defaultWidth = (outputWidth / totalLayers) * multiplier;
-		defaultWidth -= defaultWidth % 2;
-		uint32_t defaultHeight = (outputHeight / totalLayers) * multiplier;
-		defaultHeight -= defaultHeight % 2;
-
-		row.width->setValue(defaultWidth);
-		row.height->setValue(defaultHeight);
-	}
+	if (checked)
+		RefreshWHIPSimulcastLayerDefault(layerIdx);
 }
 
 void OBSBasicSettings::UpdateMoreInfoLink()

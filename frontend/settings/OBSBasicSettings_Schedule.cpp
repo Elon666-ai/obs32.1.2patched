@@ -41,6 +41,36 @@ constexpr const char *kDayLocaleKeys[7] = {
 	"Basic.Settings.Schedule.Sunday",
 };
 
+// A slot's [start, end) window, expanded onto the specific weekday(s) it
+// actually falls on. Slots with end <= start wrap past midnight (e.g.
+// 22:00-06:00) - the portion up to midnight lands on the checked day
+// itself, while the portion from midnight to End lands on the *next*
+// calendar day, same as OBSBasic::CheckSchedule() evaluates it. A slot
+// with start == end wraps to the full 24h day (no gap at all), which falls
+// out of this naturally rather than needing special-casing.
+struct DayRange {
+	int day; // 0=Monday..6=Sunday
+	int start;
+	int end; // > start, same day (never wraps)
+};
+
+std::vector<DayRange> ExpandSlotRanges(int startMinutes, int endMinutes, const std::array<bool, 7> &days)
+{
+	std::vector<DayRange> ranges;
+	bool wraps = endMinutes <= startMinutes;
+	for (int d = 0; d < 7; d++) {
+		if (!days[d])
+			continue;
+		if (!wraps) {
+			ranges.push_back({d, startMinutes, endMinutes});
+		} else {
+			ranges.push_back({d, startMinutes, 24 * 60});
+			ranges.push_back({(d + 1) % 7, 0, endMinutes});
+		}
+	}
+	return ranges;
+}
+
 } // namespace
 
 void OBSBasicSettings::InitSchedulePage()
@@ -67,7 +97,7 @@ void OBSBasicSettings::InitSchedulePage()
 	// master switch for the whole feature - unchecking it disables all
 	// child widgets automatically (native QGroupBox behavior) and, once
 	// saved, also disables the control panel's "Start/Stop Scheduled
-	// Streaming" button (see OBSBasicControls::SetScheduleFeatureEnabled)
+	// Streaming" button (see OBSBasicControls::UpdateScheduleButtonEnabled)
 	// and stops any schedule currently running (see
 	// OBSBasic::RefreshScheduleFeatureState).
 	HookWidget(ui->scheduleGroupBox, &QGroupBox::toggled, &OBSBasicSettings::ScheduleChanged);
@@ -164,11 +194,12 @@ void OBSBasicSettings::RemoveScheduleSlotRow(size_t idx)
 
 // Highlights (via the "text-danger" class, same convention as
 // advOutRecWarning/simpleOutRecWarning elsewhere in Settings) any pair of
-// slots that share at least one enabled weekday and whose [start, end)
-// ranges overlap, and shows/hides scheduleOverlapWarning accordingly.
-// Returns false if any overlap was found - QueryAllowedToClose() uses this
-// to block Apply/OK, the same way it already blocks on invalid encoder
-// selections.
+// slots that end up covering the same moment on the same calendar day once
+// expanded via ExpandSlotRanges() (which accounts for slots that wrap past
+// midnight landing part of their window on the *next* day), and shows/hides
+// scheduleOverlapWarning accordingly. Returns false if any overlap was
+// found - QueryAllowedToClose() uses this to block Apply/OK, the same way
+// it already blocks on invalid encoder selections.
 bool OBSBasicSettings::ValidateScheduleSlots()
 {
 	bool anyOverlap = false;
@@ -176,24 +207,31 @@ bool OBSBasicSettings::ValidateScheduleSlots()
 	for (auto &slot : scheduleSlots)
 		slot.rowWidget->setProperty("class", "");
 
+	std::vector<std::vector<DayRange>> allRanges(scheduleSlots.size());
 	for (size_t i = 0; i < scheduleSlots.size(); i++) {
+		std::array<bool, 7> days{};
+		for (size_t d = 0; d < 7; d++)
+			days[d] = scheduleSlots[i].days[d]->isChecked();
+
 		int startI = QTime(0, 0).secsTo(scheduleSlots[i].start->time()) / 60;
 		int endI = QTime(0, 0).secsTo(scheduleSlots[i].end->time()) / 60;
+		allRanges[i] = ExpandSlotRanges(startI, endI, days);
+	}
 
+	for (size_t i = 0; i < scheduleSlots.size(); i++) {
 		for (size_t j = i + 1; j < scheduleSlots.size(); j++) {
-			bool sharesDay = false;
-			for (size_t d = 0; d < 7 && !sharesDay; d++) {
-				if (scheduleSlots[i].days[d]->isChecked() && scheduleSlots[j].days[d]->isChecked())
-					sharesDay = true;
+			bool overlap = false;
+			for (const auto &ri : allRanges[i]) {
+				for (const auto &rj : allRanges[j]) {
+					if (ri.day == rj.day && ri.start < rj.end && rj.start < ri.end) {
+						overlap = true;
+						break;
+					}
+				}
+				if (overlap)
+					break;
 			}
-			if (!sharesDay)
-				continue;
-
-			int startJ = QTime(0, 0).secsTo(scheduleSlots[j].start->time()) / 60;
-			int endJ = QTime(0, 0).secsTo(scheduleSlots[j].end->time()) / 60;
-
-			// [startI, endI) and [startJ, endJ) overlap
-			if (startI < endJ && startJ < endI) {
+			if (overlap) {
 				anyOverlap = true;
 				scheduleSlots[i].rowWidget->setProperty("class", "text-danger");
 				scheduleSlots[j].rowWidget->setProperty("class", "text-danger");
@@ -272,11 +310,10 @@ void OBSBasicSettings::SaveScheduleSettings()
 		int startMinutes = QTime(0, 0).secsTo(slot.start->time()) / 60;
 		int endMinutes = QTime(0, 0).secsTo(slot.end->time()) / 60;
 
-		/* End must be strictly after start within the same day; clamp
-		 * rather than reject so saving never silently no-ops. */
-		if (endMinutes <= startMinutes)
-			endMinutes = std::min(startMinutes + 1, 24 * 60 - 1);
-
+		// end <= start means the slot wraps past midnight into the next
+		// day (e.g. 22:00-06:00) - see ExpandSlotRanges() above and
+		// OBSBasic::CheckSchedule(), both of which handle that case
+		// directly rather than needing it normalized away here.
 		config_set_int(config, "Schedule", (prefix + "Start").c_str(), startMinutes);
 		config_set_int(config, "Schedule", (prefix + "End").c_str(), endMinutes);
 		for (size_t d = 0; d < 7; d++)
