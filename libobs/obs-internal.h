@@ -1235,6 +1235,8 @@ struct obs_output {
 	int reconnect_retries;
 	uint32_t reconnect_retry_cur_msec;
 	float reconnect_retry_exp;
+	uint32_t reconnect_delay_override_msec;
+	bool reconnect_delay_override_set;
 	pthread_t reconnect_thread;
 	os_event_t *reconnect_stop_event;
 	volatile bool reconnecting;

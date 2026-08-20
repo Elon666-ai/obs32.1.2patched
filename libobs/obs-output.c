@@ -1186,6 +1186,16 @@ void obs_output_set_reconnect_settings(obs_output_t *output, int retry_count, in
 	output->reconnect_retry_sec = retry_sec;
 }
 
+void obs_output_set_reconnect_delay(obs_output_t *output, uint32_t delay_ms)
+{
+	if (!obs_output_valid(output, "obs_output_set_reconnect_delay"))
+		return;
+
+	/* WHIP supplies the delay for the next attempt. */
+	output->reconnect_delay_override_msec = delay_ms;
+	output->reconnect_delay_override_set = true;
+}
+
 uint64_t obs_output_get_total_bytes(const obs_output_t *output)
 {
 	if (!obs_output_valid(output, "obs_output_get_total_bytes"))
@@ -2971,6 +2981,11 @@ static void output_reconnect(struct obs_output *output)
 	if (!reconnecting(output)) {
 		output->reconnect_retry_cur_msec = output->reconnect_retry_sec * 1000;
 		output->reconnect_retries = 0;
+	}
+	if (output->reconnect_delay_override_set) {
+		output->reconnect_retry_cur_msec = output->reconnect_delay_override_msec;
+		output->reconnect_delay_override_msec = 0;
+		output->reconnect_delay_override_set = false;
 	}
 
 	if (output->reconnect_retries >= output->reconnect_retry_max) {
