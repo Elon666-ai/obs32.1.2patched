@@ -32,8 +32,6 @@ static uint16_t MAX_VIDEO_FRAGMENT_SIZE = 1200;
  * only reports once ICE has actually given up) is still handled
  * immediately, with no grace period.
  */
-static const int WHIP_DISCONNECT_GRACE_SEC = 10;
-
 const int signaling_media_id_length = 16;
 const char signaling_media_id_valid_char[] = "0123456789"
 					     "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -94,6 +92,7 @@ bool WHIPOutput::Start()
 	if (!obs_output_reconnecting(output)) {
 		using_backup = false;
 		fail_since_set = false;
+		reconnect_attempt = 0;
 	}
 
 	for (uint32_t idx = 0; idx < MAX_OUTPUT_VIDEO_ENCODERS; idx++) {
@@ -368,6 +367,18 @@ void WHIPOutput::ConfigureVideoTrack(std::string media_stream_id, std::string cn
  */
 bool WHIPOutput::Init()
 {
+	OBSDataAutoRelease output_settings = obs_output_get_settings(output);
+	disconnect_grace_sec = (int)obs_data_get_int(output_settings, "whip_disconnect_grace_sec");
+	reconnect_backoff_sec = (int)obs_data_get_int(output_settings, "whip_reconnect_backoff_sec");
+	if (!obs_data_has_user_value(output_settings, "whip_disconnect_grace_sec"))
+		disconnect_grace_sec = 10;
+	if (!obs_data_has_user_value(output_settings, "whip_reconnect_backoff_sec"))
+		reconnect_backoff_sec = 3;
+	if (disconnect_grace_sec < 0)
+		disconnect_grace_sec = 0;
+	if (reconnect_backoff_sec < 0)
+		reconnect_backoff_sec = 0;
+
 	obs_service_t *service = obs_output_get_service(output);
 	if (!service) {
 		obs_output_signal_stop(output, OBS_OUTPUT_ERROR);
@@ -457,12 +468,13 @@ bool WHIPOutput::Setup(uint64_t generation)
 		case rtc::PeerConnection::State::Disconnected:
 			do_log(LOG_INFO,
 			       "PeerConnection state is now: Disconnected - waiting up to %ds for it to recover before tearing down",
-			       WHIP_DISCONNECT_GRACE_SEC);
+			       disconnect_grace_sec);
 			StartDisconnectGraceTimer(generation);
 			break;
 		case rtc::PeerConnection::State::Failed:
 			do_log(LOG_INFO, "PeerConnection state is now: Failed");
 			MarkDisconnected();
+			PrepareReconnect();
 			Stop(false);
 			// OBS_OUTPUT_DISCONNECTED (not OBS_OUTPUT_ERROR) so
 			// libobs's own can_reconnect() treats this as a normal,
@@ -953,6 +965,7 @@ void WHIPOutput::MarkDisconnected()
 
 void WHIPOutput::MarkConnected()
 {
+	reconnect_attempt = 0;
 	if (fail_since_set) {
 		int64_t elapsed_ns = os_gettime_ns() - fail_since_ns;
 		do_log(LOG_INFO,
@@ -962,6 +975,15 @@ void WHIPOutput::MarkConnected()
 	}
 	fail_since_set = false;
 	fail_since_ns = 0;
+}
+
+void WHIPOutput::PrepareReconnect()
+{
+	const int attempt = reconnect_attempt.fetch_add(1);
+	const int delay_sec = reconnect_backoff_sec * attempt;
+	obs_output_set_reconnect_delay(output, delay_sec * 1000);
+	do_log(LOG_INFO, "WHIP reconnect attempt %d: waiting %ds before next session",
+	       attempt + 1, delay_sec);
 }
 
 bool WHIPOutput::ShouldFallback(const std::string &backup_url)
@@ -983,7 +1005,7 @@ bool WHIPOutput::ShouldFallback(const std::string &backup_url)
 }
 
 // -------------------------------------------------------------------
-// Disconnected grace period (see WHIP_DISCONNECT_GRACE_SEC above)
+// Disconnected grace period (configured through OBS Advanced settings).
 // -------------------------------------------------------------------
 void WHIPOutput::StartDisconnectGraceTimer(uint64_t generation)
 {
@@ -999,7 +1021,7 @@ void WHIPOutput::StartDisconnectGraceTimer(uint64_t generation)
 
 	disconnect_grace_thread = std::thread([this, generation]() {
 		std::unique_lock<std::mutex> lk(disconnect_grace_mutex);
-		bool cancelled = disconnect_grace_cv.wait_for(lk, std::chrono::seconds(WHIP_DISCONNECT_GRACE_SEC),
+		bool cancelled = disconnect_grace_cv.wait_for(lk, std::chrono::seconds(disconnect_grace_sec),
 							      [this]() { return disconnect_grace_cancel; });
 		lk.unlock();
 
@@ -1010,8 +1032,9 @@ void WHIPOutput::StartDisconnectGraceTimer(uint64_t generation)
 
 		do_log(LOG_INFO,
 		       "PeerConnection stayed Disconnected for %ds without recovering, tearing down and reconnecting",
-		       WHIP_DISCONNECT_GRACE_SEC);
+		       disconnect_grace_sec);
 		MarkDisconnected();
+		PrepareReconnect();
 		Stop(false);
 		obs_output_signal_stop(output, OBS_OUTPUT_DISCONNECTED);
 	});

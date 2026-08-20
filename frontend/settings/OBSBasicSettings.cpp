@@ -2562,6 +2562,8 @@ void OBSBasicSettings::LoadAdvancedSettings()
 	bool reconnect = config_get_bool(main->Config(), "Output", "Reconnect");
 	int retryDelay = config_get_int(main->Config(), "Output", "RetryDelay");
 	int maxRetries = config_get_int(main->Config(), "Output", "MaxRetries");
+	int whipDisconnectGraceSec = config_get_int(main->Config(), "Output", "WhipDisconnectGraceSec");
+	int whipReconnectBackoffSec = config_get_int(main->Config(), "Output", "WhipReconnectBackoffSec");
 	const char *filename = config_get_string(main->Config(), "Output", "FilenameFormatting");
 	bool overwriteIfExists = config_get_bool(main->Config(), "Output", "OverwriteIfExists");
 	const char *bindIP = config_get_string(main->Config(), "Output", "BindIP");
@@ -2597,6 +2599,8 @@ void OBSBasicSettings::LoadAdvancedSettings()
 	ui->reconnectEnable->setChecked(reconnect);
 	ui->reconnectRetryDelay->setValue(retryDelay);
 	ui->reconnectMaxRetries->setValue(maxRetries);
+	ui->whipDisconnectGraceSec->setValue(whipDisconnectGraceSec);
+	ui->whipReconnectBackoffSec->setValue(whipReconnectBackoffSec);
 
 	ui->streamDelaySec->setValue(delaySec);
 	ui->streamDelayPreserve->setChecked(preserveDelay);
@@ -3245,6 +3249,8 @@ void OBSBasicSettings::SaveAdvancedSettings()
 	SaveCheckBox(ui->reconnectEnable, "Output", "Reconnect");
 	SaveSpinBox(ui->reconnectRetryDelay, "Output", "RetryDelay");
 	SaveSpinBox(ui->reconnectMaxRetries, "Output", "MaxRetries");
+	SaveSpinBox(ui->whipDisconnectGraceSec, "Output", "WhipDisconnectGraceSec");
+	SaveSpinBox(ui->whipReconnectBackoffSec, "Output", "WhipReconnectBackoffSec");
 	SaveComboData(ui->bindToIP, "Output", "BindIP");
 	SaveComboData(ui->ipFamily, "Output", "IPFamily");
 	SaveCheckBox(ui->autoRemux, "Video", "AutoRemux");
