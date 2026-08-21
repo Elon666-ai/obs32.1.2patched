@@ -1,5 +1,7 @@
 #include "whip-output.h"
 #include "whip-utils.h"
+#include "ppcenter-client.h"
+#include "ppobs-identity.h"
 
 #include <obs.hpp>
 #include <util/ntp-clock.h>
@@ -385,8 +387,41 @@ bool WHIPOutput::Init()
 		return false;
 	}
 
+	// ppobs only ever authenticates a WHIP publish with a short-lived
+	// token ppcenter issues after verifying this device's appId/
+	// appSecret credentials (see docs/obs-whip-publish-auth-protocol.md)
+	// - there is no manually-entered server/bearer-token fallback and no
+	// locally-guessed default secret. A fresh token is fetched on every
+	// Init() (i.e. every connect/reconnect attempt), not cached, since a
+	// token from an earlier attempt may since have expired.
+	const char *ppcenter_url = getenv("PPCENTER_URL");
+	const char *app_id = getenv("PPCENTER_APP_ID");
+	const char *app_secret = getenv("PPCENTER_APP_SECRET");
+	const char *stream_name = getenv("PPCENTER_STREAM_NAME");
+	if (!ppcenter_url || !ppcenter_url[0] || !app_id || !app_id[0] || !app_secret || !app_secret[0] ||
+	    !stream_name || !stream_name[0]) {
+		do_log(LOG_ERROR, "PPCENTER_URL, PPCENTER_APP_ID, PPCENTER_APP_SECRET and PPCENTER_STREAM_NAME "
+				   "must all be set - ppobs only publishes using a ppcenter-issued token");
+		obs_output_signal_stop(output, OBS_OUTPUT_BAD_PATH);
+		return false;
+	}
+	const char *request_region = getenv("PPCENTER_REQUEST_REGION");
+
+	PPCenterPublishToken token;
+	std::string fetch_error;
+	if (!ppcenter_fetch_publish_token(ppcenter_url, app_id, app_secret, stream_name,
+					   request_region ? request_region : "", ppobs_get_device_uuid(),
+					   user_agent, token, fetch_error)) {
+		do_log(LOG_ERROR, "Failed to obtain WHIP publish token from ppcenter: %s", fetch_error.c_str());
+		obs_output_signal_stop(output, OBS_OUTPUT_INVALID_STREAM);
+		return false;
+	}
+
 	// Check for fallback: if primary has been failing >30s and a backup
-	// is configured, switch.  Failing on backup >30s → switch back.
+	// is configured, switch.  Failing on backup >30s → switch back. The
+	// backup server is still a manually-configured origin URL; the
+	// ppcenter-issued bearer_token below authenticates either one, since
+	// its claims bind to the stream path, not to a specific origin node.
 	const char *backup_url_c =
 		obs_service_get_connect_info(service,
 					     OBS_SERVICE_CONNECT_INFO_BACKUP_SERVER);
@@ -396,35 +431,37 @@ bool WHIPOutput::Init()
 		fail_since_set = false;
 		do_log(LOG_INFO, "Fallback: switching to %s server (%s)",
 		       using_backup ? "backup" : "primary",
-		       using_backup ? backup_url_c :
-				      obs_service_get_connect_info(
-					      service,
-					      OBS_SERVICE_CONNECT_INFO_SERVER_URL));
+		       using_backup ? backup_url_c : token.whip_url.c_str());
 	}
 
 	if (using_backup && backup_url_c && backup_url_c[0]) {
 		endpoint_url = backup_url_c;
 	} else {
-		endpoint_url = obs_service_get_connect_info(
-			service, OBS_SERVICE_CONNECT_INFO_SERVER_URL);
+		endpoint_url = token.whip_url;
 		using_backup = false;
 	}
+
+	bearer_token = token.bearer_token;
 
 	if (endpoint_url.empty()) {
 		obs_output_signal_stop(output, OBS_OUTPUT_BAD_PATH);
 		return false;
 	}
 
-	bearer_token = obs_service_get_connect_info(service, OBS_SERVICE_CONNECT_INFO_BEARER_TOKEN);
-	// If user didn't fill Bearer Token in UI, auto-inject WHIP_WS_SECRET
-	// so mmx WHIP publish auth passes (see obs-whip-publish-auth-protocol.md)
-	if (bearer_token.empty()) {
-		const char *env_secret = getenv("WHIP_WS_SECRET");
-		if (env_secret && env_secret[0])
-			bearer_token = env_secret;
-		else
-			bearer_token = "de4e53fe0b4565358cf5b47c89cc6dbbc0f902c62e4c2952";
-	}
+	// Feed the resolved WHIP URL back into the service's own settings so
+	// obs_service_get_connect_info(SERVER_URL) reflects it from here on.
+	// WsDegradeClient::RegisterOutput (called from Start(), which runs
+	// before this Init() - on the background start_stop_thread - resolves
+	// endpoint_url) derives the degrade-channel WS URL from that same
+	// call, and would otherwise be stuck with whatever "server" held at
+	// Start()-time (empty, since ppobs no longer takes a manually-entered
+	// WHIP URL). Re-registering now lets it pick up the real URL.
+	OBSDataAutoRelease server_patch = obs_data_create();
+	obs_data_set_string(server_patch, "server", endpoint_url.c_str());
+	obs_service_update(service, server_patch);
+#ifdef WHIP_DEGRADE_ACTIVE
+	WsDegradeClient::Instance().RegisterOutput(output);
+#endif
 
 	return true;
 }
