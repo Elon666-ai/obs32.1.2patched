@@ -51,7 +51,22 @@ const char *WHIPService::GetConnectInfo(enum obs_service_connect_info type)
 
 bool WHIPService::CanTryToConnect()
 {
-	return !server.empty();
+	// A manually-typed "server" URL still counts (legacy/testing path),
+	// but ppobs's actual publish flow leaves it blank and resolves the
+	// real WHIP URL from ppcenter inside WHIPOutput::Init() instead (see
+	// docs/obs-whip-publish-auth-protocol.md) - so this must also accept
+	// "ppcenter env vars are configured" as ready-to-connect, or
+	// obs_service_can_try_to_connect() blocks Start() before Init() ever
+	// gets a chance to run.
+	if (!server.empty())
+		return true;
+
+	const char *ppcenter_url = getenv("PPCENTER_URL");
+	const char *app_id = getenv("PPCENTER_APP_ID");
+	const char *app_secret = getenv("PPCENTER_APP_SECRET");
+	const char *stream_name = getenv("PPCENTER_STREAM_NAME");
+	return ppcenter_url && ppcenter_url[0] && app_id && app_id[0] && app_secret && app_secret[0] &&
+	       stream_name && stream_name[0];
 }
 
 const char *WHIPService::GetBackupServer() const

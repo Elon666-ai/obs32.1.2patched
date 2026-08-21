@@ -15,7 +15,8 @@ add_library(OBS::webrtc ALIAS obs-webrtc)
 target_sources(
   obs-webrtc
   PRIVATE obs-webrtc.cpp whip-output.cpp whip-output.h whip-service.cpp whip-service.h whip-utils.h
-          degrade-client.cpp degrade-client.h
+          degrade-client.cpp degrade-client.h ppcenter-client.cpp ppcenter-client.h ppobs-identity.cpp
+          ppobs-identity.h
 )
 
 target_compile_definitions(obs-webrtc PRIVATE WHIP_DEGRADE_ACTIVE)
