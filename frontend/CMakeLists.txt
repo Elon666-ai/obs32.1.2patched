@@ -107,8 +107,8 @@ get_property(obs_module_list GLOBAL PROPERTY OBS_MODULES_ENABLED)
 list(JOIN obs_module_list "|" SAFE_MODULES)
 target_compile_definitions(obs-studio PRIVATE "SAFE_MODULES=\"${SAFE_MODULES}\"")
 
-file(STRINGS "${CMAKE_SOURCE_DIR}/VERSION" PPOBS_VERSION_STRING LIMIT_COUNT 1)
-target_compile_definitions(obs-studio PRIVATE "PPOBS_VERSION_STRING=\"${PPOBS_VERSION_STRING}\"")
+file(STRINGS "${CMAKE_SOURCE_DIR}/VERSION" APP_VERSION_STRING LIMIT_COUNT 1)
+target_compile_definitions(obs-studio PRIVATE "APP_VERSION_STRING=\"${APP_VERSION_STRING}\"")
 
 get_target_property(target_sources obs-studio SOURCES)
 set(target_cpp_sources ${target_sources})

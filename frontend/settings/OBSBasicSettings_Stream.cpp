@@ -249,6 +249,10 @@ void OBSBasicSettings::LoadStream1Settings()
 	ui->streamPage->setEnabled(!streamActive);
 
 	ui->ignoreRecommended->setChecked(ignoreRecommended);
+	ui->temporalDenoiseEnable->setChecked(config_get_bool(main->Config(), "Stream1", "TemporalDenoise"));
+	ui->detectRoiEnable->setChecked(config_get_bool(main->Config(), "Stream1", "DetectRoi"));
+	ui->qualityScoreEnable->setChecked(config_get_bool(main->Config(), "Stream1", "QualityScore"));
+	ui->beautyFilterEnable->setChecked(config_get_bool(main->Config(), "Stream1", "BeautyFilter"));
 	ui->whipSimulcastTotalLayers->setValue(whipSimulcastTotalLayers);
 	RebuildWHIPSimulcastLayerRows();
 
@@ -332,6 +336,11 @@ void OBSBasicSettings::SaveStream1Settings()
 		obs_data_set_string(settings, "service", "WHIP");
 		obs_data_set_string(settings, "bearer_token", QT_TO_UTF8(ui->key->text()));
 		obs_data_set_string(settings, "backup_server", QT_TO_UTF8(ui->backupServer->text().trimmed()));
+		// Mirrored into the service settings so the WHIP output (and
+		// the ball/person ROI detection it drives) can read it at
+		// stream start without reaching into frontend config.
+		obs_data_set_bool(settings, "detect_roi", ui->detectRoiEnable->isChecked());
+		obs_data_set_bool(settings, "quality_score", ui->qualityScoreEnable->isChecked());
 	} else {
 		obs_data_set_string(settings, "key", QT_TO_UTF8(ui->key->text()));
 	}
@@ -352,6 +361,12 @@ void OBSBasicSettings::SaveStream1Settings()
 	}
 
 	SaveCheckBox(ui->ignoreRecommended, "Stream1", "IgnoreRecommended");
+	SaveCheckBox(ui->temporalDenoiseEnable, "Stream1", "TemporalDenoise");
+	SaveCheckBox(ui->detectRoiEnable, "Stream1", "DetectRoi");
+	SaveCheckBox(ui->qualityScoreEnable, "Stream1", "QualityScore");
+	SaveCheckBox(ui->beautyFilterEnable, "Stream1", "BeautyFilter");
+	main->ApplyTemporalDenoiseSetting();
+	main->ApplyBeautyFilterSetting();
 
 	auto oldWHIPSimulcastTotalLayers = config_get_int(main->Config(), "Stream1", "WHIPSimulcastTotalLayers");
 	SaveSpinBox(ui->whipSimulcastTotalLayers, "Stream1", "WHIPSimulcastTotalLayers");

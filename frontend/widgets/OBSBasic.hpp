@@ -42,6 +42,7 @@
 #include <QAccessible>
 #include <QSystemTrayIcon>
 
+#include <atomic>
 #include <deque>
 
 extern volatile bool recording_paused;
@@ -809,6 +810,19 @@ private:
 
 	float dpi = 1.0;
 
+	/* WHIP stream quality score overlay. Drawn onto the preview display
+	 * only (from RenderMain), never into the video mix, so the outgoing
+	 * stream and recordings are untouched. The value arrives via the
+	 * "quality_score" signal the obs-webrtc output emits from its
+	 * scorer thread; the label source is created/updated/rendered on
+	 * the graphics thread (same pattern as the preview spacing labels). */
+	OBSSourceAutoRelease qualityScoreLabel;
+	OBSSignal qualityScoreSignal;
+	std::atomic<float> qualityScoreValue{0.0f};
+	std::atomic<uint64_t> qualityScoreUpdateNs{0};
+	float qualityScoreShown = -1.0f; // graphics thread: value currently in the label text
+	QString qualityScoreFormat;      // set on the UI thread before the signal connects
+
 	void DrawBackdrop(float cx, float cy);
 	void InitPrimitives();
 	void UpdatePreviewScalingMenu();
@@ -827,6 +841,9 @@ private:
 	void UpdatePreviewSpacingHelpers();
 
 	float GetDevicePixelRatio();
+
+	static void OnQualityScore(void *data, calldata_t *cd);
+	void DrawQualityScoreLabel();
 
 	void UpdatePreviewOverflowSettings();
 	void UpdatePreviewControls();
@@ -1392,6 +1409,25 @@ signals:
 	void StreamingStarted(bool withDelay = false);
 	void StreamingStopping();
 	void StreamingStopped(bool withDelay = false);
+
+	/* -------------------------------------
+	 * MARK: - Temporal denoise enforcement
+	 * -------------------------------------
+	 */
+public:
+	// Enforces the Settings > Stream > Advanced Options "Temporal
+	// Denoise" checkbox ("Stream1"/"TemporalDenoise"): attaches the
+	// temporal_denoise_filter to every camera (dshow_input) source when
+	// enabled, removes the auto-added instance when disabled. Runs on
+	// startup, on stream-settings save, and at stream start.
+	void ApplyTemporalDenoiseSetting();
+
+	// Same enforcement pattern for the "Face Beauty" checkbox
+	// ("Stream1"/"BeautyFilter"): attaches beauty_filter to every
+	// camera (dshow_input) and media-file (ffmpeg_source) source. The
+	// filter itself only acts on frames where it detects a face, so
+	// attaching it blanket-style is a no-op for faceless content.
+	void ApplyBeautyFilterSetting();
 
 	/* -------------------------------------
 	 * MARK: - OBSBasic_Schedule

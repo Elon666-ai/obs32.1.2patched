@@ -52,6 +52,12 @@ void OBSBasic::StartStreaming()
 	if (disableOutputsRef)
 		return;
 
+	// Re-enforce here as well as on startup/settings-save, so scene
+	// collections or cameras added since then are covered before the
+	// encoders see any frames.
+	ApplyTemporalDenoiseSetting();
+	ApplyBeautyFilterSetting();
+
 	if (auth && auth->broadcastFlow()) {
 		if (!broadcastActive && !broadcastReady) {
 			QMessageBox no_broadcast(this);
@@ -233,6 +239,21 @@ void OBSBasic::StreamingStart()
 	OBSOutputAutoRelease output = obs_frontend_get_streaming_output();
 	ui->statusbar->StreamStarted(output);
 
+	// Quality score overlay in the preview: only WHIP outputs declare
+	// the "quality_score" signal, so gate on protocol to avoid a
+	// "signal not found" warning for every other output type. The
+	// format string is (re)cached here, on the UI thread, before the
+	// scorer thread can possibly reach the graphics-thread reader.
+	{
+		obs_service_t *service_obj = GetService();
+		const char *protocol = service_obj ? obs_service_get_protocol(service_obj) : nullptr;
+		if (protocol && strcmp(protocol, "WHIP") == 0) {
+			qualityScoreFormat = QTStr("Basic.Main.QualityScore");
+			qualityScoreSignal.Connect(obs_output_get_signal_handler(output), "quality_score",
+						   OnQualityScore, this);
+		}
+	}
+
 	if (sysTrayStream) {
 		sysTrayStream->setText(QTStr("Basic.Main.StopStreaming"));
 		sysTrayStream->setEnabled(true);
@@ -331,6 +352,9 @@ void OBSBasic::StreamingStop(int code, QString last_error)
 		dstr_copy(errorMessage, errorDescription);
 
 	ui->statusbar->StreamStopped();
+
+	qualityScoreSignal.Disconnect();
+	qualityScoreUpdateNs = 0;
 
 	emit StreamingStopped();
 
