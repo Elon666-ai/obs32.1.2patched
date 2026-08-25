@@ -39,10 +39,21 @@ elseif(DEFINED OBS_VERSION_OVERRIDE)
 endif()
 
 # Set beta/rc versions if suffix included in version string
+#
+# The REGEX REPLACE patterns below anchor with a leading ".*" so the match
+# spans the entire input (e.g. a leading "v" from `git describe`, and any
+# "-<N>-g<hash>" suffix from being N commits past the tag): REGEX REPLACE
+# only substitutes the matched span, so without that leading ".*" a
+# "v32.1.2-rc3-1-gabc1234" input (any commit past the tag, not just an
+# exact tag checkout) leaves the "v" outside the match and prepended to the
+# replacement, corrupting _obs_release_candidate/_obs_beta into "v3"
+# instead of "3" - which fails to compile as an integer literal wherever
+# OBS_RELEASE_CANDIDATE/OBS_BETA are used (e.g. frontend/widgets/
+# OBSBasic_Updater.cpp).
 if(_obs_version MATCHES "[0-9]+\\.[0-9]+\\.[0-9]+-rc[0-9]+")
-  string(REGEX REPLACE "[0-9]+\\.[0-9]+\\.[0-9]+-rc([0-9]+).*$" "\\1" _obs_release_candidate ${_obs_version})
+  string(REGEX REPLACE ".*[0-9]+\\.[0-9]+\\.[0-9]+-rc([0-9]+).*$" "\\1" _obs_release_candidate ${_obs_version})
 elseif(_obs_version MATCHES "[0-9]+\\.[0-9]+\\.[0-9]+-beta[0-9]+")
-  string(REGEX REPLACE "[0-9]+\\.[0-9]+\\.[0-9]+-beta([0-9]+).*$" "\\1" _obs_beta ${_obs_version})
+  string(REGEX REPLACE ".*[0-9]+\\.[0-9]+\\.[0-9]+-beta([0-9]+).*$" "\\1" _obs_beta ${_obs_version})
 endif()
 
 list(GET _obs_version_canonical 0 OBS_VERSION_MAJOR)
