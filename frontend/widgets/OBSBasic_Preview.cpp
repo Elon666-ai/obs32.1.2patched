@@ -192,12 +192,101 @@ void OBSBasic::RenderMain(void *data, uint32_t, uint32_t)
 	if (window->drawSpacingHelpers)
 		window->ui->preview->DrawSpacingHelpers();
 
+	window->DrawQualityScoreLabel();
+
 	/* --------------------------------------- */
 
 	gs_projection_pop();
 	gs_viewport_pop();
 
 	GS_DEBUG_MARKER_END();
+}
+
+static obs_source_t *CreateQualityScoreLabel(float pixelRatio)
+{
+	OBSDataAutoRelease settings = obs_data_create();
+	OBSDataAutoRelease font = obs_data_create();
+
+#if defined(_WIN32)
+	obs_data_set_string(font, "face", "Arial");
+#elif defined(__APPLE__)
+	obs_data_set_string(font, "face", "Helvetica");
+#else
+	obs_data_set_string(font, "face", "Monospace");
+#endif
+	obs_data_set_int(font, "flags", 1); // Bold text
+	obs_data_set_int(font, "size", 16 * pixelRatio);
+
+	obs_data_set_obj(settings, "font", font);
+	obs_data_set_bool(settings, "outline", true);
+
+#ifdef _WIN32
+	obs_data_set_int(settings, "outline_color", 0x000000);
+	obs_data_set_int(settings, "outline_size", 3);
+	const char *text_source_id = "text_gdiplus";
+#else
+	const char *text_source_id = "text_ft2_source";
+#endif
+
+	return obs_source_create_private(text_source_id, "Preview quality score label", settings);
+}
+
+/* Signal callback from the WHIP output's quality scorer thread - only
+ * stores the value; all Qt/graphics work happens in
+ * DrawQualityScoreLabel on the graphics thread. */
+void OBSBasic::OnQualityScore(void *data, calldata_t *cd)
+{
+	OBSBasic *window = static_cast<OBSBasic *>(data);
+	window->qualityScoreValue.store((float)calldata_float(cd, "score"));
+	window->qualityScoreUpdateNs.store(os_gettime_ns());
+}
+
+void OBSBasic::DrawQualityScoreLabel()
+{
+	/* Hide once the scorer stops feeding us (stream stopped, scorer
+	 * disabled, or it gave up on decode errors). */
+	const uint64_t ts = qualityScoreUpdateNs.load();
+	if (!ts || os_gettime_ns() - ts > 15000000000ULL)
+		return;
+
+	const float pixelRatio = GetDevicePixelRatio();
+
+	if (!qualityScoreLabel)
+		qualityScoreLabel = CreateQualityScoreLabel(pixelRatio);
+	if (!qualityScoreLabel)
+		return;
+
+	const float score = qualityScoreValue.load();
+	if (fabsf(score - qualityScoreShown) >= 0.05f) {
+		QString text = qualityScoreFormat.arg((double)score, 0, 'f', 1);
+		OBSDataAutoRelease settings = obs_source_get_settings(qualityScoreLabel);
+		obs_data_set_string(settings, "text", QT_TO_UTF8(text));
+		obs_source_update(qualityScoreLabel, settings);
+		qualityScoreShown = score;
+	}
+
+	const uint32_t labelCX = obs_source_get_width(qualityScoreLabel);
+	const uint32_t labelCY = obs_source_get_height(qualityScoreLabel);
+	if (!labelCX || !labelCY)
+		return;
+
+	uint32_t width, height;
+	obs_display_size(ui->preview->GetDisplay(), &width, &height);
+
+	/* Anchor to the widget's top-right corner: that's the letterbox
+	 * band (free space) whenever the video doesn't fill the widget,
+	 * and just the frame's edge otherwise. The current ortho puts the
+	 * video's top-left at (0,0) with the widget spanning
+	 * [-previewX .. width-previewX] x [-previewY .. height-previewY]. */
+	const float margin = 10.0f * pixelRatio;
+	const float x = float(width) - float(previewX) - float(labelCX) - margin;
+	const float y = -float(previewY) + margin;
+
+	gs_matrix_push();
+	gs_matrix_identity();
+	gs_matrix_translate3f(x, y, 0.0f);
+	obs_source_video_render(qualityScoreLabel);
+	gs_matrix_pop();
 }
 
 void OBSBasic::ResizePreview(uint32_t cx, uint32_t cy)

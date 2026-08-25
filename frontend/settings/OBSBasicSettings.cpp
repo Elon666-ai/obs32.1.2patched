@@ -412,6 +412,10 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 	HookWidget(ui->authUsername,         EDIT_CHANGED,   STREAM1_CHANGED);
 	HookWidget(ui->authPw,               EDIT_CHANGED,   STREAM1_CHANGED);
 	HookWidget(ui->ignoreRecommended,    CHECK_CHANGED,  STREAM1_CHANGED);
+	HookWidget(ui->temporalDenoiseEnable, CHECK_CHANGED, STREAM1_CHANGED);
+	HookWidget(ui->detectRoiEnable,      CHECK_CHANGED,  STREAM1_CHANGED);
+	HookWidget(ui->qualityScoreEnable,   CHECK_CHANGED,  STREAM1_CHANGED);
+	HookWidget(ui->beautyFilterEnable,   CHECK_CHANGED,  STREAM1_CHANGED);
 	HookWidget(ui->whipSimulcastTotalLayers, SCROLL_CHANGED, STREAM1_CHANGED);
 	HookWidget(ui->enableMultitrackVideo,      CHECK_CHANGED,  STREAM1_CHANGED);
 	HookWidget(ui->multitrackVideoMaximumAggregateBitrateAuto, CHECK_CHANGED,  STREAM1_CHANGED);

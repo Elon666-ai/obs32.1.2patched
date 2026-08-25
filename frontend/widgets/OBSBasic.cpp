@@ -730,6 +730,10 @@ bool OBSBasic::InitBasicConfigDefaults()
 	config_set_default_string(activeConfiguration, "Output", "Mode", "Simple");
 
 	config_set_default_bool(activeConfiguration, "Stream1", "IgnoreRecommended", false);
+	config_set_default_bool(activeConfiguration, "Stream1", "TemporalDenoise", true);
+	config_set_default_bool(activeConfiguration, "Stream1", "BeautyFilter", true);
+	config_set_default_bool(activeConfiguration, "Stream1", "DetectRoi", true);
+	config_set_default_bool(activeConfiguration, "Stream1", "QualityScore", true);
 	config_set_default_bool(activeConfiguration, "Stream1", "EnableMultitrackVideo", false);
 	config_set_default_bool(activeConfiguration, "Stream1", "MultitrackVideoMaximumAggregateBitrateAuto", true);
 	config_set_default_bool(activeConfiguration, "Stream1", "MultitrackVideoMaximumVideoTracksAuto", true);
@@ -1403,10 +1407,87 @@ void OBSBasic::OnFirstLoad()
 
 	Auth::Load();
 
+	ApplyTemporalDenoiseSetting();
+	ApplyBeautyFilterSetting();
+
 	bool showLogViewerOnStartup = config_get_bool(App()->GetUserConfig(), "LogViewer", "ShowLogStartup");
 
 	if (showLogViewerOnStartup)
 		on_actionViewCurrentLog_triggered();
+}
+
+static const char *TEMPORAL_DENOISE_FILTER_ID = "temporal_denoise_filter";
+static const char *TEMPORAL_DENOISE_AUTO_NAME = "Temporal Denoise (Auto)";
+
+void OBSBasic::ApplyTemporalDenoiseSetting()
+{
+	bool enabled = config_get_bool(activeConfiguration, "Stream1", "TemporalDenoise");
+
+	auto cb = [](void *param, obs_source_t *source) -> bool {
+		const bool enable = *static_cast<bool *>(param);
+
+		if (strcmp(obs_source_get_id(source), "dshow_input") != 0)
+			return true;
+
+		// The auto-managed instance is identified by its fixed name;
+		// manually added copies of the filter are left alone.
+		OBSSourceAutoRelease existing = obs_source_get_filter_by_name(source, TEMPORAL_DENOISE_AUTO_NAME);
+
+		if (enable && !existing) {
+			OBSSourceAutoRelease filter = obs_source_create_private(TEMPORAL_DENOISE_FILTER_ID,
+										TEMPORAL_DENOISE_AUTO_NAME, nullptr);
+			if (filter) {
+				obs_source_filter_add(source, filter);
+				blog(LOG_INFO, "Temporal denoise: attached to '%s'", obs_source_get_name(source));
+			}
+		} else if (!enable && existing) {
+			obs_source_filter_remove(source, existing);
+			blog(LOG_INFO, "Temporal denoise: removed from '%s'", obs_source_get_name(source));
+		}
+
+		return true;
+	};
+
+	obs_enum_sources(cb, &enabled);
+}
+
+static const char *BEAUTY_FILTER_ID = "beauty_filter";
+static const char *BEAUTY_FILTER_AUTO_NAME = "Face Beauty (Auto)";
+
+void OBSBasic::ApplyBeautyFilterSetting()
+{
+	bool enabled = config_get_bool(activeConfiguration, "Stream1", "BeautyFilter");
+
+	auto cb = [](void *param, obs_source_t *source) -> bool {
+		const bool enable = *static_cast<bool *>(param);
+
+		// Cameras and media-file playback both deliver async CPU
+		// frames the beauty filter can process; the filter is a
+		// passthrough on frames without a detected face either way.
+		const char *id = obs_source_get_id(source);
+		if (strcmp(id, "dshow_input") != 0 && strcmp(id, "ffmpeg_source") != 0)
+			return true;
+
+		// The auto-managed instance is identified by its fixed name;
+		// manually added copies of the filter are left alone.
+		OBSSourceAutoRelease existing = obs_source_get_filter_by_name(source, BEAUTY_FILTER_AUTO_NAME);
+
+		if (enable && !existing) {
+			OBSSourceAutoRelease filter =
+				obs_source_create_private(BEAUTY_FILTER_ID, BEAUTY_FILTER_AUTO_NAME, nullptr);
+			if (filter) {
+				obs_source_filter_add(source, filter);
+				blog(LOG_INFO, "Face beauty: attached to '%s'", obs_source_get_name(source));
+			}
+		} else if (!enable && existing) {
+			obs_source_filter_remove(source, existing);
+			blog(LOG_INFO, "Face beauty: removed from '%s'", obs_source_get_name(source));
+		}
+
+		return true;
+	};
+
+	obs_enum_sources(cb, &enabled);
 }
 
 OBSBasic::~OBSBasic()
@@ -2115,7 +2196,7 @@ void OBSBasic::UpdateTitleBar()
 	if (previewProgramMode)
 		name << "Studio ";
 
-	name << PPOBS_VERSION_STRING;
+	name << APP_VERSION_STRING;
 	if (safe_mode)
 		name << " (" << Str("TitleBar.SafeMode") << ")";
 	if (App()->IsPortableMode())

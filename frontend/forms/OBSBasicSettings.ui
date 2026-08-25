@@ -2315,6 +2315,46 @@
                    </property>
                   </widget>
                  </item>
+                 <item row="4" column="1">
+                  <widget class="QCheckBox" name="temporalDenoiseEnable">
+                   <property name="text">
+                    <string>Basic.Settings.Stream.TemporalDenoise</string>
+                   </property>
+                   <property name="checked">
+                    <bool>true</bool>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="5" column="1">
+                  <widget class="QCheckBox" name="detectRoiEnable">
+                   <property name="text">
+                    <string>Basic.Settings.Stream.DetectRoi</string>
+                   </property>
+                   <property name="checked">
+                    <bool>true</bool>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="6" column="1">
+                  <widget class="QCheckBox" name="qualityScoreEnable">
+                   <property name="text">
+                    <string>Basic.Settings.Stream.QualityScore</string>
+                   </property>
+                   <property name="checked">
+                    <bool>true</bool>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="7" column="1">
+                  <widget class="QCheckBox" name="beautyFilterEnable">
+                   <property name="text">
+                    <string>Basic.Settings.Stream.BeautyFilter</string>
+                   </property>
+                   <property name="checked">
+                    <bool>true</bool>
+                   </property>
+                  </widget>
+                 </item>
                 </layout>
                </widget>
               </item>
