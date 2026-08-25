@@ -23,7 +23,37 @@ obs_properties_t *WHIPService::Properties()
 	obs_properties_add_text(ppts, "backup_server", obs_module_text("Service.BackupServer"), OBS_TEXT_DEFAULT);
 	obs_properties_add_text(ppts, "bearer_token", obs_module_text("Service.BearerToken"), OBS_TEXT_PASSWORD);
 
+	// Encoder ROI: prioritize quality inside a rectangle (at the output
+	// resolution) and optionally degrade everything outside it. Applied
+	// per simulcast layer by WHIPOutput on stream start.
+	obs_properties_t *roi = obs_properties_create();
+	obs_properties_add_int(roi, "roi_left", obs_module_text("Service.RoiLeft"), 0, 16384, 2);
+	obs_properties_add_int(roi, "roi_top", obs_module_text("Service.RoiTop"), 0, 16384, 2);
+	obs_properties_add_int(roi, "roi_right", obs_module_text("Service.RoiRight"), 0, 16384, 2);
+	obs_properties_add_int(roi, "roi_bottom", obs_module_text("Service.RoiBottom"), 0, 16384, 2);
+	obs_properties_add_float_slider(roi, "roi_priority", obs_module_text("Service.RoiPriority"), 0.0, 1.0, 0.05);
+	obs_properties_add_float_slider(roi, "roi_bg_priority", obs_module_text("Service.RoiBgPriority"), -1.0, 0.0,
+					0.05);
+	obs_properties_add_group(ppts, "roi_enabled", obs_module_text("Service.Roi"), OBS_GROUP_CHECKABLE, roi);
+
 	return ppts;
+}
+
+void WHIPService::Defaults(obs_data_t *defaults)
+{
+	// Master switch for detection-driven ROI (balls + people), set from
+	// Settings > Stream > Advanced Options; default on.
+	obs_data_set_default_bool(defaults, "detect_roi", true);
+	// Full-reference quality score of the outgoing stream (program feed
+	// = 100), same settings page; default on.
+	obs_data_set_default_bool(defaults, "quality_score", true);
+	obs_data_set_default_bool(defaults, "roi_enabled", false);
+	obs_data_set_default_int(defaults, "roi_left", 0);
+	obs_data_set_default_int(defaults, "roi_top", 0);
+	obs_data_set_default_int(defaults, "roi_right", 0);
+	obs_data_set_default_int(defaults, "roi_bottom", 0);
+	obs_data_set_default_double(defaults, "roi_priority", 0.3);
+	obs_data_set_default_double(defaults, "roi_bg_priority", -0.25);
 }
 
 void WHIPService::ApplyEncoderSettings(obs_data_t *video_settings, obs_data_t *)
@@ -51,22 +81,7 @@ const char *WHIPService::GetConnectInfo(enum obs_service_connect_info type)
 
 bool WHIPService::CanTryToConnect()
 {
-	// A manually-typed "server" URL still counts (legacy/testing path),
-	// but ppobs's actual publish flow leaves it blank and resolves the
-	// real WHIP URL from ppcenter inside WHIPOutput::Init() instead (see
-	// docs/obs-whip-publish-auth-protocol.md) - so this must also accept
-	// "ppcenter env vars are configured" as ready-to-connect, or
-	// obs_service_can_try_to_connect() blocks Start() before Init() ever
-	// gets a chance to run.
-	if (!server.empty())
-		return true;
-
-	const char *ppcenter_url = getenv("PPCENTER_URL");
-	const char *app_id = getenv("PPCENTER_APP_ID");
-	const char *app_secret = getenv("PPCENTER_APP_SECRET");
-	const char *stream_name = getenv("PPCENTER_STREAM_NAME");
-	return ppcenter_url && ppcenter_url[0] && app_id && app_id[0] && app_secret && app_secret[0] &&
-	       stream_name && stream_name[0];
+	return !server.empty();
 }
 
 const char *WHIPService::GetBackupServer() const
@@ -93,6 +108,9 @@ void register_whip_service()
 	};
 	info.get_properties = [](void *) -> obs_properties_t * {
 		return WHIPService::Properties();
+	};
+	info.get_defaults = [](obs_data_t *defaults) {
+		WHIPService::Defaults(defaults);
 	};
 	info.get_protocol = [](void *) -> const char * {
 		return "WHIP";
