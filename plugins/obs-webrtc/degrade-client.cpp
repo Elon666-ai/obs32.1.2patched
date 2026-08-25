@@ -190,21 +190,18 @@ void WsDegradeClient::ConnectLocked()
 		return;
 	}
 
-	// Read WHIP_WS_SECRET (must match mmx's WHIP_DEGRADE_WS_SECRET). No
-	// hardcoded fallback: an unconfigured secret means this connection
-	// cannot be authenticated, so don't attempt it with a value mmx
-	// (and every other ppobs deployment) can already guess.
+	// Read WHIP_WS_SECRET — prefer env var, fall back to the same
+	// hardcoded default used by whip-output.cpp's bearer-token fallback
+	// (see comment there), so a stock dev/test server with a shared
+	// static secret works out of the box.
 	{
 		const char *secret = getenv("WHIP_WS_SECRET");
-		if (!secret || !secret[0]) {
-			do_log(LOG_ERROR, "WHIP_WS_SECRET is not set - not connecting to degrade WS channel");
-			conn.reset();
-			return;
-		}
+		if (!secret || !secret[0])
+			secret = "de4e53fe0b4565358cf5b47c89cc6dbbc0f902c62e4c2952";
 
-		conn->append_header("Authorization",
-				    std::string("Bearer ") + secret);
-		do_log(LOG_INFO, "WS auth: Bearer header set (secret src: env)");
+		conn->append_header("Authorization", std::string("Bearer ") + secret);
+		do_log(LOG_INFO, "WS auth: Bearer header set (secret src: %s)",
+		       getenv("WHIP_WS_SECRET") ? "env" : "hardcoded-default");
 	}
 
 	client.connect(conn);

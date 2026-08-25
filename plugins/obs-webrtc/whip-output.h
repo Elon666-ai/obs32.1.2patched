@@ -1,5 +1,8 @@
 #pragma once
 
+#include "motion-roi.h"
+#include "quality-score.h"
+
 #include <obs-module.h>
 #include <util/curl/curl-helper.h>
 #include <util/platform.h>
@@ -57,6 +60,7 @@ private:
 	bool ShouldFallback(const std::string &backup_url);
 	void StartDisconnectGraceTimer(uint64_t generation);
 	void CancelDisconnectGraceTimer();
+	void ApplyRoi();
 
 	obs_output_t *output;
 
@@ -107,6 +111,15 @@ private:
 	std::shared_ptr<rtc::DataChannel> timestamp_channel;
 
 	std::map<obs_encoder_t *, std::shared_ptr<videoLayerState>> videoLayerStates;
+
+	// Motion-driven dynamic ROI (balls + people); started/stopped from
+	// ApplyRoi() based on the service's "detect_roi" setting.
+	MotionRoiDetector motion_roi;
+
+	// Full-reference quality score (program feed = 100) for the top
+	// layer; started from Start() based on the service's "quality_score"
+	// setting, fed from Data().
+	QualityScorer quality_scorer;
 
 	std::atomic<size_t> total_bytes_sent;
 	std::atomic<int> connect_time_ms;

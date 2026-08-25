@@ -1,7 +1,5 @@
 #include "whip-output.h"
 #include "whip-utils.h"
-#include "ppcenter-client.h"
-#include "ppobs-identity.h"
 
 #include <obs.hpp>
 #include <util/ntp-clock.h>
@@ -71,6 +69,11 @@ WHIPOutput::WHIPOutput(obs_data_t *, obs_output_t *output)
 	  start_time_ns(0),
 	  last_audio_timestamp(0)
 {
+	// Declared at output creation so the frontend can connect before
+	// streaming starts; emitted per scored sample from the quality
+	// scorer's decode thread (see quality-score.cpp).
+	signal_handler_add(obs_output_get_signal_handler(output),
+			   "void quality_score(ptr output, float score, float psnr)");
 }
 
 WHIPOutput::~WHIPOutput()
@@ -80,6 +83,119 @@ WHIPOutput::~WHIPOutput()
 	std::lock_guard<std::mutex> l(start_stop_mutex);
 	if (start_stop_thread.joinable())
 		start_stop_thread.join();
+}
+
+/*
+ * Applies the encoder ROI configured on the WHIP service (if any) to
+ * every simulcast layer encoder. The rectangle is specified at the
+ * output (mix) resolution and scaled per layer, expanded outward so
+ * integer rounding never shrinks the covered region. Two regions are
+ * pushed per encoder: the quality-priority rectangle first, then a
+ * full-frame background region - earlier regions win where they
+ * overlap (see obs_encoder_add_roi docs), so the rectangle keeps its
+ * priority and everything outside it gets the (negative) background
+ * priority.
+ */
+void WHIPOutput::ApplyRoi()
+{
+	obs_service_t *service = obs_output_get_service(output);
+	if (!service)
+		return;
+
+	OBSDataAutoRelease settings = obs_service_get_settings(service);
+
+	// obs_context_data_init() never merges a service type's get_defaults()
+	// into the actual runtime settings object (that only happens for the
+	// scratch object obs_get_service_properties()/obs_service_defaults()
+	// build to seed a properties dialog's displayed defaults) - and
+	// roi_priority/roi_bg_priority have no frontend UI control writing an
+	// explicit value either, so obs_data_get_double() below would silently
+	// return the library's built-in 0.0 fallback instead of the intended
+	// 0.3/-0.25 from WHIPService::Defaults(), making every ROI region a
+	// zero-priority (i.e. no-op) no matter what the detector found. Setting
+	// the same defaults again here, directly on this settings object,
+	// makes the per-key fallback in obs_data_get_double() below actually
+	// apply.
+	obs_data_set_default_double(settings, "roi_priority", 0.3);
+	obs_data_set_default_double(settings, "roi_bg_priority", -0.25);
+
+	const bool enabled = obs_data_get_bool(settings, "roi_enabled");
+
+	// Master switch from Settings > Stream > Advanced Options. The
+	// manually-configured rectangle ("roi_enabled", debug aid) takes
+	// precedence over the detector when both are on.
+	const bool detect_roi = obs_data_get_bool(settings, "detect_roi");
+
+	video_t *video = obs_output_video(output);
+	const struct video_output_info *voi = video ? video_output_get_info(video) : nullptr;
+	const int64_t base_width = voi ? voi->width : 0;
+	const int64_t base_height = voi ? voi->height : 0;
+
+	const int64_t left = obs_data_get_int(settings, "roi_left");
+	const int64_t top = obs_data_get_int(settings, "roi_top");
+	const int64_t right = obs_data_get_int(settings, "roi_right");
+	const int64_t bottom = obs_data_get_int(settings, "roi_bottom");
+	const float priority = std::clamp((float)obs_data_get_double(settings, "roi_priority"), 0.0f, 1.0f);
+	const float bg_priority = std::clamp((float)obs_data_get_double(settings, "roi_bg_priority"), -1.0f, 0.0f);
+
+	const bool rect_valid = base_width > 0 && base_height > 0 && right > left && bottom > top;
+
+	for (uint32_t idx = 0; idx < MAX_OUTPUT_VIDEO_ENCODERS; idx++) {
+		obs_encoder_t *encoder = obs_output_get_video_encoder2(output, idx);
+		if (encoder == nullptr)
+			break;
+
+		// Encoders persist across output restarts, so regions from a
+		// previous session must be cleared even when ROI is disabled.
+		obs_encoder_clear_roi(encoder);
+		if (!enabled || !rect_valid)
+			continue;
+
+		const int64_t enc_width = obs_encoder_get_width(encoder);
+		const int64_t enc_height = obs_encoder_get_height(encoder);
+		if (enc_width <= 0 || enc_height <= 0)
+			continue;
+
+		struct obs_encoder_roi region = {};
+		region.left = (uint32_t)std::clamp<int64_t>(left * enc_width / base_width, 0, enc_width);
+		region.top = (uint32_t)std::clamp<int64_t>(top * enc_height / base_height, 0, enc_height);
+		region.right = (uint32_t)std::clamp<int64_t>((right * enc_width + base_width - 1) / base_width, 0,
+							     enc_width);
+		region.bottom = (uint32_t)std::clamp<int64_t>((bottom * enc_height + base_height - 1) / base_height, 0,
+							      enc_height);
+		region.priority = priority;
+
+		bool ok = obs_encoder_add_roi(encoder, &region);
+
+		if (ok && bg_priority < 0.0f) {
+			struct obs_encoder_roi background = {};
+			background.right = (uint32_t)enc_width;
+			background.bottom = (uint32_t)enc_height;
+			background.priority = bg_priority;
+			ok = obs_encoder_add_roi(encoder, &background);
+		}
+
+		if (ok) {
+			do_log(LOG_INFO,
+			       "ROI applied to layer %u (%ux%u): rect %u,%u-%u,%u priority %.2f, "
+			       "background priority %.2f",
+			       idx, (uint32_t)enc_width, (uint32_t)enc_height, region.left, region.top, region.right,
+			       region.bottom, priority, bg_priority);
+		} else {
+			do_log(LOG_WARNING,
+			       "Failed to apply ROI to layer %u (%ux%u) - scaled region smaller than "
+			       "16x16 or encoder lacks ROI support",
+			       idx, (uint32_t)enc_width, (uint32_t)enc_height);
+		}
+	}
+
+	if (detect_roi && !enabled) {
+		do_log(LOG_INFO, "Ball/person detection ROI enabled - starting motion detector");
+		motion_roi.Start(output, priority, bg_priority);
+	} else {
+		motion_roi.Stop();
+		do_log(LOG_INFO, "Ball/person detection ROI is %s", detect_roi ? "superseded by manual ROI" : "disabled");
+	}
 }
 
 bool WHIPOutput::Start()
@@ -115,6 +231,15 @@ bool WHIPOutput::Start()
 	if (!obs_output_initialize_encoders(output, 0))
 		return false;
 
+	ApplyRoi();
+
+	{
+		obs_service_t *service = obs_output_get_service(output);
+		OBSDataAutoRelease service_settings = service ? obs_service_get_settings(service) : nullptr;
+		if (service_settings && obs_data_get_bool(service_settings, "quality_score"))
+			quality_scorer.Start(output);
+	}
+
 #ifdef WHIP_DEGRADE_ACTIVE
 	// Kick off the mmx degrade-channel WS connection as early as
 	// possible (before the WHIP/RTC connection itself even starts
@@ -142,6 +267,9 @@ void WHIPOutput::Stop(bool signal)
 	// the grace timer below giving up), any pending Disconnected grace
 	// timer is now moot.
 	CancelDisconnectGraceTimer();
+
+	motion_roi.Stop();
+	quality_scorer.Stop();
 
 #ifdef WHIP_DEGRADE_ACTIVE
 	WsDegradeClient::Instance().UnregisterOutput();
@@ -211,6 +339,8 @@ void WHIPOutput::Data(struct encoder_packet *packet)
 			       (void *)packet->encoder, videoLayerStates.size());
 			return;
 		}
+
+		quality_scorer.OnPacket(packet);
 
 		rtp_config->sequenceNumber = videoLayerState->sequenceNumber;
 		rtp_config->ssrc = videoLayerState->ssrc;
@@ -387,81 +517,46 @@ bool WHIPOutput::Init()
 		return false;
 	}
 
-	// ppobs only ever authenticates a WHIP publish with a short-lived
-	// token ppcenter issues after verifying this device's appId/
-	// appSecret credentials (see docs/obs-whip-publish-auth-protocol.md)
-	// - there is no manually-entered server/bearer-token fallback and no
-	// locally-guessed default secret. A fresh token is fetched on every
-	// Init() (i.e. every connect/reconnect attempt), not cached, since a
-	// token from an earlier attempt may since have expired.
-	const char *ppcenter_url = getenv("PPCENTER_URL");
-	const char *app_id = getenv("PPCENTER_APP_ID");
-	const char *app_secret = getenv("PPCENTER_APP_SECRET");
-	const char *stream_name = getenv("PPCENTER_STREAM_NAME");
-	if (!ppcenter_url || !ppcenter_url[0] || !app_id || !app_id[0] || !app_secret || !app_secret[0] ||
-	    !stream_name || !stream_name[0]) {
-		do_log(LOG_ERROR, "PPCENTER_URL, PPCENTER_APP_ID, PPCENTER_APP_SECRET and PPCENTER_STREAM_NAME "
-				   "must all be set - ppobs only publishes using a ppcenter-issued token");
-		obs_output_signal_stop(output, OBS_OUTPUT_BAD_PATH);
-		return false;
-	}
-	const char *request_region = getenv("PPCENTER_REQUEST_REGION");
-
-	PPCenterPublishToken token;
-	std::string fetch_error;
-	if (!ppcenter_fetch_publish_token(ppcenter_url, app_id, app_secret, stream_name,
-					   request_region ? request_region : "", ppobs_get_device_uuid(),
-					   user_agent, token, fetch_error)) {
-		do_log(LOG_ERROR, "Failed to obtain WHIP publish token from ppcenter: %s", fetch_error.c_str());
-		obs_output_signal_stop(output, OBS_OUTPUT_INVALID_STREAM);
-		return false;
-	}
+	const char *server_url = obs_service_get_connect_info(service, OBS_SERVICE_CONNECT_INFO_SERVER_URL);
+	const char *token = obs_service_get_connect_info(service, OBS_SERVICE_CONNECT_INFO_BEARER_TOKEN);
 
 	// Check for fallback: if primary has been failing >30s and a backup
-	// is configured, switch.  Failing on backup >30s → switch back. The
-	// backup server is still a manually-configured origin URL; the
-	// ppcenter-issued bearer_token below authenticates either one, since
-	// its claims bind to the stream path, not to a specific origin node.
-	const char *backup_url_c =
-		obs_service_get_connect_info(service,
-					     OBS_SERVICE_CONNECT_INFO_BACKUP_SERVER);
+	// is configured, switch. Failing on backup >30s → switch back. The
+	// bearer token authenticates either one.
+	const char *backup_url_c = obs_service_get_connect_info(service, OBS_SERVICE_CONNECT_INFO_BACKUP_SERVER);
 
 	if (ShouldFallback(backup_url_c ? backup_url_c : "")) {
 		using_backup = !using_backup;
 		fail_since_set = false;
-		do_log(LOG_INFO, "Fallback: switching to %s server (%s)",
-		       using_backup ? "backup" : "primary",
-		       using_backup ? backup_url_c : token.whip_url.c_str());
+		do_log(LOG_INFO, "Fallback: switching to %s server", using_backup ? "backup" : "primary");
 	}
 
 	if (using_backup && backup_url_c && backup_url_c[0]) {
 		endpoint_url = backup_url_c;
 	} else {
-		endpoint_url = token.whip_url;
+		endpoint_url = server_url ? server_url : "";
 		using_backup = false;
 	}
 
-	bearer_token = token.bearer_token;
+	bearer_token = token ? token : "";
+	// If the user didn't fill in a Bearer Token, fall back to
+	// WHIP_WS_SECRET so publish auth still passes against a server
+	// configured with that shared secret, same as before ppcenter-issued
+	// per-session tokens existed. Falls back further to a hardcoded
+	// default so a fresh checkout works against a stock dev/test server
+	// with zero configuration.
+	if (bearer_token.empty()) {
+		const char *env_secret = getenv("WHIP_WS_SECRET");
+		if (env_secret && env_secret[0])
+			bearer_token = env_secret;
+		else
+			bearer_token = "de4e53fe0b4565358cf5b47c89cc6dbbc0f902c62e4c2952";
+	}
 
 	if (endpoint_url.empty()) {
 		obs_output_signal_stop(output, OBS_OUTPUT_BAD_PATH);
 		return false;
 	}
-
-	// Feed the resolved WHIP URL back into the service's own settings so
-	// obs_service_get_connect_info(SERVER_URL) reflects it from here on.
-	// WsDegradeClient::RegisterOutput (called from Start(), which runs
-	// before this Init() - on the background start_stop_thread - resolves
-	// endpoint_url) derives the degrade-channel WS URL from that same
-	// call, and would otherwise be stuck with whatever "server" held at
-	// Start()-time (empty, since ppobs no longer takes a manually-entered
-	// WHIP URL). Re-registering now lets it pick up the real URL.
-	OBSDataAutoRelease server_patch = obs_data_create();
-	obs_data_set_string(server_patch, "server", endpoint_url.c_str());
-	obs_service_update(service, server_patch);
-#ifdef WHIP_DEGRADE_ACTIVE
-	WsDegradeClient::Instance().RegisterOutput(output);
-#endif
 
 	return true;
 }

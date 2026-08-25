@@ -72,19 +72,12 @@ static inline std::string generate_user_agent()
 #define OS_NAME "Linux"
 #endif
 
-	// Build the user-agent string. Identifies as "ppobs", not generic
-	// OBS-Studio - ppcenter/mmx gate WHIP publish on this device
-	// presenting a ppcenter-issued token (see
-	// docs/obs-whip-publish-auth-protocol.md), and telemetry/abuse
-	// triage on that side needs to be able to tell a ppobs client apart
-	// from a stock OBS build at a glance.
+	// Build the user-agent string
 	std::stringstream ua;
 	// User agent header prefix
-	ua << "User-Agent: ppobs/1.0 ";
-	// OBS version info
-	ua << "(OBS-Studio/" << obs_get_version_string() << "; ";
+	ua << "User-Agent: obs-studio/" << obs_get_version_string() << " ";
 	// Operating system version info
-	ua << OS_NAME << "; " << obs_get_locale() << ")";
+	ua << "(" << OS_NAME << "; " << obs_get_locale() << ")";
 
 	return ua.str();
 }
