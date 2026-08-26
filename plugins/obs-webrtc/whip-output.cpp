@@ -117,9 +117,13 @@ void WHIPOutput::ApplyRoi()
 	// object, makes the per-key fallback in obs_data_get_double() below
 	// actually apply. Must stay in sync with WHIPService::Defaults() and
 	// OBSBasicSettings::LoadStream1Settings()'s QP<->priority conversion
-	// (-3/+3 QP, i.e. +-3/51 priority).
-	obs_data_set_default_double(settings, "roi_priority", 3.0 / 51.0);
-	obs_data_set_default_double(settings, "roi_bg_priority", -3.0 / 51.0);
+	// (6/-8 QP, i.e. +6/-8 out of 51 priority). Same gap applies to
+	// the enable switches below, on a service that's never been through
+	// the Settings dialog.
+	obs_data_set_default_double(settings, "roi_priority", 6.0 / 51.0);
+	obs_data_set_default_double(settings, "roi_bg_priority", -8.0 / 51.0);
+	obs_data_set_default_bool(settings, "roi_enabled", false);
+	obs_data_set_default_bool(settings, "detect_roi", true);
 
 	const bool enabled = obs_data_get_bool(settings, "roi_enabled");
 

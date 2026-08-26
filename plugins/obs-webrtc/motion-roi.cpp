@@ -33,12 +33,31 @@ static constexpr uint32_t CENSUS_DEN = 5; /* active when flips >= samples * 2/5 
 static constexpr uint32_t SAMPLE_W = DET_W / 2;
 static constexpr uint32_t SAMPLE_H = DET_H / 2;
 /* Blocks stay in the ROI this many processed frames after they last
- * moved (~1s at 60fps/3), so balls between bounces and briefly-still
+ * moved (~1.25s at 60fps/3), so balls between bounces and briefly-still
  * people don't flicker out. */
-static constexpr uint8_t HOLD_TICKS = 20;
+static constexpr uint8_t HOLD_TICKS = 25;
 static constexpr size_t MIN_BLOCKS = 2; /* ignore single-block speckle */
 static constexpr size_t MAX_RECTS = 4;
-static constexpr uint64_t MIN_UPDATE_INTERVAL_NS = 200000000; /* 200ms */
+static constexpr uint64_t MIN_UPDATE_INTERVAL_NS = 250000000; /* 250ms */
+
+/* Fraction of the ROI contrast added or removed per update tick. The
+ * foreground boost and the background penalty are both scaled by the
+ * ramp, so the map fades in over RAMP_STEP^-1 ticks (~1s) instead of
+ * appearing the moment the first block moves - and fades back out the
+ * same way when the scene goes still, with the last rectangles held in
+ * place until the ramp reaches zero. */
+static constexpr float RAMP_STEP = 0.25f;
+/* Total inward edge movement (in blocks, summed over all rectangles)
+ * needed before a shrink is worth re-programming the encoders for.
+ * Outward movement always is: the newly covered area needs the bits
+ * now, whereas an over-large region only wastes a few. */
+static constexpr uint32_t SHRINK_HYST_BLOCKS = 4;
+/* A region covering this much of the frame can't be prioritized
+ * against anything - there is no background left to take bits from -
+ * so it is dropped and the effect ramps out instead. */
+static constexpr float MAX_RECT_AREA_FRAC = 0.40f;
+static constexpr float MAX_TOTAL_AREA_FRAC = 0.55f;
+static constexpr uint32_t GRID_AREA = GRID_W * GRID_H;
 
 MotionRoiDetector::~MotionRoiDetector()
 {
@@ -50,8 +69,10 @@ void MotionRoiDetector::Start(obs_output_t *out, float prio, float bg_prio)
 	std::lock_guard<std::mutex> lock(mutex);
 	if (started) {
 		/* Reconnect path: ApplyRoi just cleared the encoders' regions,
-		 * so force the next processed frame to reapply ours. */
-		last_applied.clear();
+		 * so force the next processed frame to reapply ours, and let
+		 * the contrast ramp back in rather than snapping. */
+		applied.clear();
+		applied_scale = 0.0f;
 		return;
 	}
 
@@ -64,7 +85,8 @@ void MotionRoiDetector::Start(obs_output_t *out, float prio, float bg_prio)
 	prev_mean = 0;
 	prev_valid = false;
 	hold.assign((size_t)GRID_W * GRID_H, 0);
-	last_applied.clear();
+	applied.clear();
+	applied_scale = 0.0f;
 	last_update_ns = 0;
 
 	struct video_scale_info conversion = {};
@@ -248,31 +270,123 @@ void MotionRoiDetector::ProcessLocked(const uint8_t *luma, uint32_t linesize, ui
 	if (comps.size() > MAX_RECTS)
 		comps.resize(MAX_RECTS);
 
-	/* Only touch the encoders when the block-quantized rects actually
-	 * changed, and no more often than every 200ms - the hold counters
-	 * already keep the rects stable between bounces/steps. */
-	std::vector<uint32_t> sig;
-	sig.reserve(comps.size());
-	for (const Component &c : comps)
-		sig.push_back((c.min_x << 24) | (c.min_y << 16) | (c.max_x << 8) | c.max_y);
+	/* Area gate: a rectangle spanning most of the frame (a person
+	 * walking across leaves one behind, since the hold counters make
+	 * the box the union of ~1.25s of motion) has no background left to
+	 * take bits from, so boosting it only costs the rate controller
+	 * headroom. Drop those, and stop once the kept rectangles already
+	 * cover more than MAX_TOTAL_AREA_FRAC of the grid. If that leaves
+	 * nothing, the ramp below fades the effect out. */
+	std::vector<Rect> rects;
+	uint32_t total_area = 0;
 
-	if (sig == last_applied)
+	for (const Component &c : comps) {
+		const uint32_t area = (c.max_x - c.min_x + 1) * (c.max_y - c.min_y + 1);
+
+		if (area > (uint32_t)(MAX_RECT_AREA_FRAC * GRID_AREA))
+			continue;
+		if (total_area + area > (uint32_t)(MAX_TOTAL_AREA_FRAC * GRID_AREA))
+			continue;
+
+		total_area += area;
+		rects.push_back({c.min_x, c.min_y, c.max_x, c.max_y});
+		if (rects.size() >= MAX_RECTS)
+			break;
+	}
+
+	/* Stable ordering, so this frame's rectangles can be compared
+	 * edge-by-edge against the ones the encoders currently hold
+	 * (`comps` is sorted by block count, which reshuffles as regions
+	 * grow and shrink). */
+	std::sort(rects.begin(), rects.end(), [](const Rect &a, const Rect &b) {
+		return a.min_y != b.min_y ? a.min_y < b.min_y : a.min_x < b.min_x;
+	});
+
+	const float target = rects.empty() ? 0.0f : 1.0f;
+
+	/* Fade-out: hold the last rectangles in place while the ramp runs
+	 * down, so the boost decays over ~1s instead of vanishing between
+	 * two frames. */
+	if (rects.empty())
+		rects = applied;
+	if (rects.empty()) {
+		applied_scale = 0.0f;
 		return;
+	}
+
+	/* Geometry: growth is applied immediately, shrinking only once the
+	 * edges have pulled in far enough to be worth an update. */
+	bool geometry_changed = rects.size() != applied.size();
+
+	if (!geometry_changed) {
+		uint32_t inward = 0;
+
+		for (size_t i = 0; i < rects.size(); i++) {
+			const Rect &n = rects[i];
+			const Rect &a = applied[i];
+
+			if (n.min_x < a.min_x || n.min_y < a.min_y || n.max_x > a.max_x || n.max_y > a.max_y) {
+				geometry_changed = true;
+				break;
+			}
+
+			inward += (n.min_x - a.min_x) + (n.min_y - a.min_y) + (a.max_x - n.max_x) +
+				  (a.max_y - n.max_y);
+		}
+
+		if (!geometry_changed && inward >= SHRINK_HYST_BLOCKS)
+			geometry_changed = true;
+	}
+
+	float scale = applied_scale;
+	if (scale < target)
+		scale = std::min(target, scale + RAMP_STEP);
+	else if (scale > target)
+		scale = std::max(target, scale - RAMP_STEP);
+
+	if (!geometry_changed && scale == applied_scale)
+		return;
+	/* Too soon: leave the state untouched and retry on a later frame,
+	 * which also paces the ramp at one step per update interval. */
 	if (timestamp - last_update_ns < MIN_UPDATE_INTERVAL_NS)
 		return;
 
-	last_applied = sig;
-	last_update_ns = timestamp;
+	const bool was_active = !applied.empty() && applied_scale > 0.0f;
 
-	if (comps.empty()) {
-		blog(LOG_INFO, "[obs-webrtc] motion ROI: no active region (cleared)");
-	} else {
-		for (const Component &c : comps)
-			blog(LOG_INFO,
-			     "[obs-webrtc] motion ROI: region at block (%u,%u)-(%u,%u) [%zu blocks] of %ux%u grid",
-			     c.min_x, c.min_y, c.max_x, c.max_y, c.blocks, GRID_W, GRID_H);
+	if (scale <= 0.0f) {
+		applied.clear();
+		applied_scale = 0.0f;
+		last_update_ns = timestamp;
+		ApplyLocked(applied, 0.0f);
+
+		if (was_active)
+			blog(LOG_INFO, "[obs-webrtc] motion ROI: no active region (cleared)");
+		return;
 	}
 
+	if (geometry_changed) {
+		for (const Rect &r : rects)
+			blog(LOG_INFO,
+			     "[obs-webrtc] motion ROI: region at block (%u,%u)-(%u,%u) of %ux%u grid (ramp %.0f%%)",
+			     r.min_x, r.min_y, r.max_x, r.max_y, GRID_W, GRID_H, (double)scale * 100.0);
+	}
+
+	applied = rects;
+	applied_scale = scale;
+	last_update_ns = timestamp;
+	ApplyLocked(applied, scale);
+}
+
+/*
+ * Programs `rects` into every video encoder on the output, with the
+ * configured priorities scaled by `scale` (the fade ramp) and a
+ * full-frame background region behind them. An empty rect list or a
+ * zero scale just clears the encoders' regions, leaving a uniform QP
+ * map - which is also what a uniform non-zero offset would amount to,
+ * since only the contrast between regions does anything.
+ */
+void MotionRoiDetector::ApplyLocked(const std::vector<Rect> &rects, float scale)
+{
 	for (uint32_t idx = 0; idx < MAX_OUTPUT_VIDEO_ENCODERS; idx++) {
 		obs_encoder_t *encoder = obs_output_get_video_encoder2(output, idx);
 		if (encoder == nullptr)
@@ -284,15 +398,17 @@ void MotionRoiDetector::ProcessLocked(const uint8_t *luma, uint32_t linesize, ui
 			continue;
 
 		obs_encoder_clear_roi(encoder);
+		if (rects.empty() || scale <= 0.0f)
+			continue;
 
 		bool any = false;
-		for (const Component &c : comps) {
+		for (const Rect &r : rects) {
 			struct obs_encoder_roi region = {};
-			region.left = c.min_x * BLOCK * enc_w / DET_W;
-			region.top = c.min_y * BLOCK * enc_h / DET_H;
-			region.right = std::min((c.max_x + 1) * BLOCK, DET_W) * enc_w / DET_W;
-			region.bottom = std::min((c.max_y + 1) * BLOCK, DET_H) * enc_h / DET_H;
-			region.priority = priority;
+			region.left = r.min_x * BLOCK * enc_w / DET_W;
+			region.top = r.min_y * BLOCK * enc_h / DET_H;
+			region.right = std::min((r.max_x + 1) * BLOCK, DET_W) * enc_w / DET_W;
+			region.bottom = std::min((r.max_y + 1) * BLOCK, DET_H) * enc_h / DET_H;
+			region.priority = priority * scale;
 
 			if (obs_encoder_add_roi(encoder, &region))
 				any = true;
@@ -302,7 +418,7 @@ void MotionRoiDetector::ProcessLocked(const uint8_t *luma, uint32_t linesize, ui
 			struct obs_encoder_roi background = {};
 			background.right = enc_w;
 			background.bottom = enc_h;
-			background.priority = bg_priority;
+			background.priority = bg_priority * scale;
 			obs_encoder_add_roi(encoder, &background);
 		}
 	}
