@@ -210,6 +210,20 @@ void OBSBasic::on_action_Settings_triggered()
 
 	settings_already_executing = false;
 
+	// If manual ROI ended up enabled on the (possibly just-changed) active
+	// WHIP service, land back on the preview with the "Set ROI" tool
+	// already armed instead of making the user go click it themselves -
+	// UpdateRoiSelectButton() first so the button is shown/enabled before
+	// SetRoiSelectMode(true) checks it.
+	UpdateRoiSelectButton();
+	obs_service_t *activeService = GetService();
+	if (activeService && strcmp(obs_service_get_type(activeService), "whip_custom") == 0 &&
+	    !outputHandler->StreamingActive()) {
+		OBSDataAutoRelease activeServiceSettings = obs_service_get_settings(activeService);
+		if (obs_data_get_bool(activeServiceSettings, "roi_enabled"))
+			ui->preview->SetRoiSelectMode(true);
+	}
+
 	if (restart) {
 		QMessageBox::StandardButton button =
 			OBSMessageBox::question(this, QTStr("Restart"), QTStr("NeedsRestart"));

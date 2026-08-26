@@ -71,6 +71,35 @@ private:
 	bool scrollMode = false;
 	bool fixedScaling = false;
 	bool selectionBox = false;
+
+	// Manual-ROI drag-to-select tool (see SetRoiSelectMode()). Armed by
+	// the main window's "Set ROI" preview button, fully independent of
+	// the scene-editing state above: mousePressEvent/mouseMoveEvent/
+	// mouseReleaseEvent all branch off to dedicated handling and return
+	// immediately whenever roiSelectMode is set, so it never interacts
+	// with scene item selection/dragging.
+	bool roiSelectMode = false;
+	bool roiSelectDragging = false;
+	vec2 roiSelectStart;
+	vec2 roiSelectPos;
+
+	// Set when the drag that started roiSelectDragging began inside the
+	// existing roiOverlay rect: the box is being repositioned (fixed
+	// size, translated) rather than freshly drawn (fixed start corner,
+	// opposite corner follows the mouse). See mousePressEvent().
+	bool roiSelectMoveMode = false;
+	vec2 roiMoveGrabOffset; // press pos - roiOverlayTL, at press time
+	vec2 roiMoveSize;       // roiOverlayBR - roiOverlayTL, at press time
+
+	// Passive "here's the currently-saved region" overlay (see
+	// SetRoiOverlay()) - independent of the drag tool above, shown
+	// whenever the active service has a manual ROI enabled so the
+	// operator always knows where it is relative to the live framing.
+	// Suppressed while a new drag is in progress so the two don't
+	// overlap and confuse which one is which.
+	bool roiOverlayVisible = false;
+	vec2 roiOverlayTL;
+	vec2 roiOverlayBR;
 	bool overflowHidden = false;
 	bool overflowSelectionHidden = false;
 	bool overflowAlwaysVisible = false;
@@ -89,6 +118,7 @@ private:
 	static bool DrawSelectedOverflow(obs_scene_t *scene, obs_sceneitem_t *item, void *param);
 	static bool DrawSelectedItem(obs_scene_t *scene, obs_sceneitem_t *item, void *param);
 	static bool DrawSelectionBox(float x1, float y1, float x2, float y2, gs_vertbuffer_t *box);
+	static bool DrawRoiSelectBox(float x1, float y1, float x2, float y2, gs_vertbuffer_t *box, bool filled = true);
 
 	static OBSSceneItem GetItemAtPos(const vec2 &pos, bool selectBelow);
 	static bool SelectedAtPos(const vec2 &pos);
@@ -194,7 +224,32 @@ public:
 	void UpdateXScrollBar(float cx);
 	void UpdateYScrollBar(float cy);
 
+	// Arms/disarms the manual-ROI drag-to-select tool. While armed, all
+	// mouse interaction on the preview is redirected to the ROI tool
+	// (normal scene editing is suspended): starting the drag inside the
+	// existing roiOverlay rect moves it as-is, starting anywhere else
+	// draws a brand new rectangle from scratch. Releasing the drag emits
+	// roiRegionSelected and disarms automatically, as does a right-click
+	// while armed (cancel). Safe to call redundantly with the same value.
+	void SetRoiSelectMode(bool enable);
+	inline bool RoiSelectMode() const { return roiSelectMode; }
+
+	// Shows/hides the passive "currently-saved region" overlay. left/top/
+	// right/bottom are in canvas/base-resolution coordinates (same space
+	// as scene item positions); ignored when visible is false.
+	void SetRoiOverlay(bool visible, float left = 0.0f, float top = 0.0f, float right = 0.0f, float bottom = 0.0f);
+
 signals:
 	void scalingChanged(float scalingAmount);
 	void fixedScalingChanged(bool isFixed);
+
+	// enable mirrors RoiSelectMode() - emitted whenever it changes,
+	// including the implicit disarm after a completed drag or a cancel,
+	// so the toolbar button that armed it can keep its checked state in
+	// sync without polling.
+	void roiSelectModeChanged(bool enable);
+	// Canvas/base-resolution coordinates (same space as scene item
+	// positions), unordered (start corner, then the opposite corner at
+	// release) and not yet clamped to the canvas bounds.
+	void roiRegionSelected(float left, float top, float right, float bottom);
 };

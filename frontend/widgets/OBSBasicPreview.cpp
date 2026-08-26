@@ -541,8 +541,45 @@ void OBSBasicPreview::wheelEvent(QWheelEvent *event)
 	OBSQTDisplay::wheelEvent(event);
 }
 
+// Ordered defensively (min/max) even though roiOverlayTL/BR are always
+// stored left<right/top<bottom by SetRoiOverlay() - cheap insurance
+// against a future caller passing swapped corners.
+static inline bool PointInRoiOverlay(const vec2 &pos, const vec2 &tl, const vec2 &br)
+{
+	const float minX = std::min(tl.x, br.x), maxX = std::max(tl.x, br.x);
+	const float minY = std::min(tl.y, br.y), maxY = std::max(tl.y, br.y);
+	return pos.x >= minX && pos.x <= maxX && pos.y >= minY && pos.y <= maxY;
+}
+
 void OBSBasicPreview::mousePressEvent(QMouseEvent *event)
 {
+	if (roiSelectMode) {
+		if (event->button() == Qt::LeftButton) {
+			vec2 pos = GetMouseEventPos(event);
+			pos.x = std::round(pos.x);
+			pos.y = std::round(pos.y);
+
+			if (roiOverlayVisible && PointInRoiOverlay(pos, roiOverlayTL, roiOverlayBR)) {
+				// Reposition the existing region (fixed size) instead
+				// of starting a brand new one.
+				roiSelectMoveMode = true;
+				vec2_sub(&roiMoveGrabOffset, &pos, &roiOverlayTL);
+				vec2_sub(&roiMoveSize, &roiOverlayBR, &roiOverlayTL);
+				roiSelectStart = roiOverlayTL;
+				roiSelectPos = roiOverlayBR;
+			} else {
+				roiSelectMoveMode = false;
+				roiSelectStart = pos;
+				roiSelectPos = pos;
+			}
+			roiSelectDragging = true;
+		} else {
+			// Any other button cancels instead of starting a drag.
+			SetRoiSelectMode(false);
+		}
+		return;
+	}
+
 	QPointF pos = event->position();
 
 	if (scrollMode && IsFixedScaling() && event->button() == Qt::LeftButton) {
@@ -714,6 +751,32 @@ void OBSBasicPreview::ProcessClick(const vec2 &pos)
 
 void OBSBasicPreview::mouseReleaseEvent(QMouseEvent *event)
 {
+	if (roiSelectMode) {
+		if (roiSelectDragging && event->button() == Qt::LeftButton) {
+			// Recomputed from the exact release position rather than
+			// reusing the last mouseMoveEvent's roiSelectStart/Pos,
+			// which may be a move-event tick stale.
+			vec2 pos = GetMouseEventPos(event);
+			pos.x = std::round(pos.x);
+			pos.y = std::round(pos.y);
+
+			vec2 finalStart, finalEnd;
+			if (roiSelectMoveMode) {
+				// pos is wherever inside the box it was grabbed, not a
+				// corner - undo the grab offset to get the true corner.
+				vec2_sub(&finalStart, &pos, &roiMoveGrabOffset);
+				vec2_add(&finalEnd, &finalStart, &roiMoveSize);
+			} else {
+				finalStart = roiSelectStart;
+				finalEnd = pos;
+			}
+
+			emit roiRegionSelected(finalStart.x, finalStart.y, finalEnd.x, finalEnd.y);
+		}
+		SetRoiSelectMode(false);
+		return;
+	}
+
 	if (scrollMode)
 		setCursor(Qt::OpenHandCursor);
 
@@ -1527,6 +1590,31 @@ void OBSBasicPreview::RotateItem(const vec2 &pos)
 
 void OBSBasicPreview::mouseMoveEvent(QMouseEvent *event)
 {
+	if (roiSelectMode) {
+		if (roiSelectDragging) {
+			vec2 pos = GetMouseEventPos(event);
+			pos.x = std::round(pos.x);
+			pos.y = std::round(pos.y);
+
+			if (roiSelectMoveMode) {
+				// Fixed size, translated: keep the grabbed point under
+				// the cursor rather than snapping the box's corner to it.
+				vec2_sub(&roiSelectStart, &pos, &roiMoveGrabOffset);
+				vec2_add(&roiSelectPos, &roiSelectStart, &roiMoveSize);
+			} else {
+				roiSelectPos = pos;
+			}
+		} else if (roiOverlayVisible) {
+			// Hover hint before the drag starts: SizeAll over the
+			// existing region (a click here will move it), Cross
+			// anywhere else (a click here draws a new one).
+			vec2 pos = GetMouseEventPos(event);
+			setCursor(PointInRoiOverlay(pos, roiOverlayTL, roiOverlayBR) ? Qt::SizeAllCursor
+										     : Qt::CrossCursor);
+		}
+		return;
+	}
+
 	OBSBasic *main = OBSBasic::Get();
 	changed = true;
 
@@ -1628,6 +1716,32 @@ void OBSBasicPreview::leaveEvent(QEvent *)
 	std::lock_guard<std::mutex> lock(selectMutex);
 	if (!selectionBox)
 		hoveredPreviewItems.clear();
+}
+
+void OBSBasicPreview::SetRoiSelectMode(bool enable)
+{
+	if (roiSelectMode == enable)
+		return;
+
+	roiSelectMode = enable;
+	roiSelectDragging = false;
+	roiSelectMoveMode = false;
+
+	if (enable)
+		setCursor(Qt::CrossCursor);
+	else
+		unsetCursor();
+
+	emit roiSelectModeChanged(enable);
+}
+
+void OBSBasicPreview::SetRoiOverlay(bool visible, float left, float top, float right, float bottom)
+{
+	roiOverlayVisible = visible;
+	if (visible) {
+		vec2_set(&roiOverlayTL, left, top);
+		vec2_set(&roiOverlayBR, right, bottom);
+	}
 }
 
 static void DrawLine(float x1, float y1, float x2, float y2, float thickness, vec2 scale)
@@ -2093,6 +2207,55 @@ bool OBSBasicPreview::DrawSelectionBox(float x1, float y1, float x2, float y2, g
 	return true;
 }
 
+// Same shape as DrawSelectionBox, but a distinct color so the manual-ROI
+// drag tool can't be mistaken for the ordinary scene-item selection box
+// while it's on screen. filled=false draws only the border, used for the
+// passive "here's the currently-saved region" overlay so it doesn't
+// obscure the video underneath the way the active drag's translucent
+// fill deliberately does.
+bool OBSBasicPreview::DrawRoiSelectBox(float x1, float y1, float x2, float y2, gs_vertbuffer_t *rectFill, bool filled)
+{
+	OBSBasic *main = OBSBasic::Get();
+
+	float pixelRatio = main->GetDevicePixelRatio();
+
+	x1 = std::round(x1);
+	x2 = std::round(x2);
+	y1 = std::round(y1);
+	y2 = std::round(y2);
+
+	gs_effect_t *eff = gs_get_effect();
+	gs_eparam_t *colParam = gs_effect_get_param_by_name(eff, "color");
+
+	vec4 borderColor;
+	vec4_set(&borderColor, 1.0f, 0.6f, 0.0f, 1.0f);
+
+	vec2 scale;
+	vec2_set(&scale, std::abs(x2 - x1), std::abs(y2 - y1));
+
+	gs_matrix_push();
+	gs_matrix_identity();
+
+	gs_matrix_translate3f(x1, y1, 0.0f);
+	gs_matrix_scale3f(x2 - x1, y2 - y1, 1.0f);
+
+	if (filled) {
+		vec4 fillColor;
+		vec4_set(&fillColor, 1.0f, 0.6f, 0.0f, 0.25f);
+
+		gs_effect_set_vec4(colParam, &fillColor);
+		gs_load_vertexbuffer(rectFill);
+		gs_draw(GS_TRISTRIP, 0, 0);
+	}
+
+	gs_effect_set_vec4(colParam, &borderColor);
+	DrawRect(HANDLE_RADIUS * pixelRatio, scale);
+
+	gs_matrix_pop();
+
+	return true;
+}
+
 void OBSBasicPreview::DrawOverflow()
 {
 	if (locked)
@@ -2127,12 +2290,48 @@ void OBSBasicPreview::DrawOverflow()
 
 void OBSBasicPreview::DrawSceneEditing()
 {
+	OBSBasic *main = OBSBasic::Get();
+
+	// Independent of the scene-editing lock below - drawing a manual ROI
+	// box doesn't touch the scene, so there's no reason a locked preview
+	// should block it.
+	if (roiSelectDragging) {
+		if (!rectFill) {
+			gs_render_start(true);
+
+			gs_vertex2f(0.0f, 0.0f);
+			gs_vertex2f(1.0f, 0.0f);
+			gs_vertex2f(0.0f, 1.0f);
+			gs_vertex2f(1.0f, 1.0f);
+
+			rectFill = gs_render_save();
+		}
+
+		while (gs_effect_loop(solidEffect, "Solid")) {
+			DrawRoiSelectBox(roiSelectStart.x * main->previewScale, roiSelectStart.y * main->previewScale,
+					 roiSelectPos.x * main->previewScale, roiSelectPos.y * main->previewScale,
+					 rectFill);
+		}
+
+		gs_load_vertexbuffer(nullptr);
+	} else if (roiOverlayVisible) {
+		// Border only (see DrawRoiSelectBox's filled=false) - this is a
+		// passive "here's what's already saved" indicator, not
+		// something being actively edited, so it shouldn't darken the
+		// video underneath it.
+		while (gs_effect_loop(solidEffect, "Solid")) {
+			DrawRoiSelectBox(roiOverlayTL.x * main->previewScale, roiOverlayTL.y * main->previewScale,
+					 roiOverlayBR.x * main->previewScale, roiOverlayBR.y * main->previewScale,
+					 nullptr, false);
+		}
+
+		gs_load_vertexbuffer(nullptr);
+	}
+
 	if (locked)
 		return;
 
 	GS_DEBUG_MARKER_BEGIN(GS_DEBUG_COLOR_DEFAULT, "DrawSceneEditing");
-
-	OBSBasic *main = OBSBasic::Get();
 
 	OBSScene scene = main->GetCurrentScene();
 

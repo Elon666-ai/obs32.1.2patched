@@ -848,6 +848,14 @@ private:
 	void UpdatePreviewOverflowSettings();
 	void UpdatePreviewControls();
 
+	// Slot for ui->preview's roiRegionSelected signal (canvas/base-
+	// resolution coordinates): scales the rectangle down to the actual
+	// WHIP output resolution, writes it into the active service's
+	// roi_* settings (see WHIPOutput::ApplyRoi()), and saves. No-ops if
+	// the active service isn't WHIP or the drag was too small to be
+	// intentional.
+	void OnRoiRegionSelected(float left, float top, float right, float bottom);
+
 	/* OBS Callbacks */
 	static void RenderMain(void *data, uint32_t cx, uint32_t cy);
 
@@ -1424,10 +1432,19 @@ public:
 
 	// Same enforcement pattern for the "Face Beauty" checkbox
 	// ("Stream1"/"BeautyFilter"): attaches beauty_filter to every
-	// camera (dshow_input) and media-file (ffmpeg_source) source. The
-	// filter itself only acts on frames where it detects a face, so
-	// attaching it blanket-style is a no-op for faceless content.
+	// camera (dshow_input) source only - media-file/network playback
+	// sources are excluded and never receive the filter. The filter
+	// itself only acts on frames where it detects a face, so attaching
+	// it blanket-style to cameras is a no-op for faceless content.
 	void ApplyBeautyFilterSetting();
+
+	// Shows/enables ui->previewRoiSelectButton only while the active
+	// service is WHIP and no stream is active (manual ROI is WHIP-only,
+	// and the settings page it also lives on is disabled while
+	// streaming - see LoadStream1Settings()). Runs on startup, at
+	// stream start/stop, and on stream-settings save, same as the Apply*
+	// functions above.
+	void UpdateRoiSelectButton();
 
 	/* -------------------------------------
 	 * MARK: - OBSBasic_Schedule

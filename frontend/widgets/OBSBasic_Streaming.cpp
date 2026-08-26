@@ -254,6 +254,10 @@ void OBSBasic::StreamingStart()
 		}
 	}
 
+	// Manual ROI can't be changed once live - see LoadStream1Settings(),
+	// which disables the whole Stream settings page the same way.
+	UpdateRoiSelectButton();
+
 	if (sysTrayStream) {
 		sysTrayStream->setText(QTStr("Basic.Main.StopStreaming"));
 		sysTrayStream->setEnabled(true);
@@ -355,6 +359,8 @@ void OBSBasic::StreamingStop(int code, QString last_error)
 
 	qualityScoreSignal.Disconnect();
 	qualityScoreUpdateNs = 0;
+
+	UpdateRoiSelectButton();
 
 	emit StreamingStopped();
 

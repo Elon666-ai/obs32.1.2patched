@@ -107,17 +107,19 @@ void WHIPOutput::ApplyRoi()
 	// obs_context_data_init() never merges a service type's get_defaults()
 	// into the actual runtime settings object (that only happens for the
 	// scratch object obs_get_service_properties()/obs_service_defaults()
-	// build to seed a properties dialog's displayed defaults) - and
-	// roi_priority/roi_bg_priority have no frontend UI control writing an
-	// explicit value either, so obs_data_get_double() below would silently
-	// return the library's built-in 0.0 fallback instead of the intended
-	// 0.3/-0.25 from WHIPService::Defaults(), making every ROI region a
-	// zero-priority (i.e. no-op) no matter what the detector found. Setting
-	// the same defaults again here, directly on this settings object,
-	// makes the per-key fallback in obs_data_get_double() below actually
-	// apply.
-	obs_data_set_default_double(settings, "roi_priority", 0.3);
-	obs_data_set_default_double(settings, "roi_bg_priority", -0.25);
+	// build to seed a properties dialog's displayed defaults), so
+	// obs_data_get_double() below would silently return the library's
+	// built-in 0.0 fallback instead of the intended default from
+	// WHIPService::Defaults() whenever a user has never touched the
+	// Manual ROI QP fields (Settings > Stream), making every ROI region a
+	// zero-priority (i.e. no-op) no matter what the detector found.
+	// Setting the same defaults again here, directly on this settings
+	// object, makes the per-key fallback in obs_data_get_double() below
+	// actually apply. Must stay in sync with WHIPService::Defaults() and
+	// OBSBasicSettings::LoadStream1Settings()'s QP<->priority conversion
+	// (-3/+3 QP, i.e. +-3/51 priority).
+	obs_data_set_default_double(settings, "roi_priority", 3.0 / 51.0);
+	obs_data_set_default_double(settings, "roi_bg_priority", -3.0 / 51.0);
 
 	const bool enabled = obs_data_get_bool(settings, "roi_enabled");
 
