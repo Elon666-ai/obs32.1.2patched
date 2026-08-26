@@ -52,8 +52,12 @@ void WHIPService::Defaults(obs_data_t *defaults)
 	obs_data_set_default_int(defaults, "roi_top", 0);
 	obs_data_set_default_int(defaults, "roi_right", 0);
 	obs_data_set_default_int(defaults, "roi_bottom", 0);
-	obs_data_set_default_double(defaults, "roi_priority", 0.3);
-	obs_data_set_default_double(defaults, "roi_bg_priority", -0.25);
+	// +-3 QP (see WHIPOutput::ApplyRoi()'s matching re-seed and
+	// OBSBasicSettings::LoadStream1Settings()'s QP<->priority
+	// conversion) - roughly "inside looks 2x the quality of outside"
+	// under the ~6-QP-per-2x-bitrate rule of thumb.
+	obs_data_set_default_double(defaults, "roi_priority", 3.0 / 51.0);
+	obs_data_set_default_double(defaults, "roi_bg_priority", -3.0 / 51.0);
 }
 
 void WHIPService::ApplyEncoderSettings(obs_data_t *video_settings, obs_data_t *)

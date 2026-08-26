@@ -26,6 +26,7 @@
 
 #include <QColorDialog>
 
+#include <algorithm>
 #include <sstream>
 
 extern void undo_redo(const std::string &data);
@@ -737,6 +738,106 @@ void OBSBasic::UpdatePreviewControls()
 	ui->previewZoomOutButton->setEnabled(!maxZoom);
 
 	ui->actionPreviewResetZoom->setEnabled(scalingLevel != 0);
+}
+
+void OBSBasic::UpdateRoiSelectButton()
+{
+	obs_service_t *svc = GetService();
+	const bool isWhip = svc && strcmp(obs_service_get_type(svc), "whip_custom") == 0;
+	const bool streaming = outputHandler && outputHandler->StreamingActive();
+
+	ui->previewRoiSelectButton->setVisible(isWhip);
+	ui->previewRoiSelectButton->setEnabled(isWhip && !streaming);
+
+	// Disarm rather than leave a dangling armed tool if the button that
+	// armed it just got hidden/disabled out from under the user (service
+	// switched away from WHIP, or a stream just started).
+	if ((!isWhip || streaming) && ui->preview->RoiSelectMode())
+		ui->preview->SetRoiSelectMode(false);
+
+	// Passive preview overlay showing the currently-saved region (see
+	// OBSBasicPreview::SetRoiOverlay()) - kept up regardless of streaming
+	// state (unlike the button above) since it's just a "here's what's
+	// configured" indicator, still useful to check mid-stream if the
+	// camera framing shifted.
+	bool roiEnabled = false;
+	int roiLeft = 0, roiTop = 0, roiRight = 0, roiBottom = 0;
+	if (isWhip) {
+		OBSDataAutoRelease settings = obs_service_get_settings(svc);
+		roiEnabled = obs_data_get_bool(settings, "roi_enabled");
+		roiLeft = (int)obs_data_get_int(settings, "roi_left");
+		roiTop = (int)obs_data_get_int(settings, "roi_top");
+		roiRight = (int)obs_data_get_int(settings, "roi_right");
+		roiBottom = (int)obs_data_get_int(settings, "roi_bottom");
+	}
+
+	obs_video_info ovi;
+	const bool haveVideo = obs_get_video_info(&ovi) && ovi.base_width && ovi.base_height;
+	const uint32_t outputWidth = haveVideo ? video_output_get_width(obs_get_video()) : 0;
+	const uint32_t outputHeight = haveVideo ? video_output_get_height(obs_get_video()) : 0;
+
+	if (roiEnabled && haveVideo && outputWidth && outputHeight && roiRight > roiLeft && roiBottom > roiTop) {
+		// Inverse of the canvas -> output scaling in OnRoiRegionSelected().
+		const float scaleX = (float)ovi.base_width / (float)outputWidth;
+		const float scaleY = (float)ovi.base_height / (float)outputHeight;
+
+		ui->preview->SetRoiOverlay(true, roiLeft * scaleX, roiTop * scaleY, roiRight * scaleX,
+					   roiBottom * scaleY);
+	} else {
+		ui->preview->SetRoiOverlay(false);
+	}
+}
+
+void OBSBasic::OnRoiRegionSelected(float left, float top, float right, float bottom)
+{
+	obs_service_t *svc = GetService();
+	if (!svc || strcmp(obs_service_get_type(svc), "whip_custom") != 0)
+		return;
+
+	obs_video_info ovi;
+	if (!obs_get_video_info(&ovi) || !ovi.base_width || !ovi.base_height)
+		return;
+
+	const uint32_t outputWidth = video_output_get_width(obs_get_video());
+	const uint32_t outputHeight = video_output_get_height(obs_get_video());
+	if (!outputWidth || !outputHeight)
+		return;
+
+	// roi_left/top/right/bottom are defined at the WHIP output's actual
+	// (scaled) resolution - see WHIPOutput::ApplyRoi() - which generally
+	// differs from the canvas/base resolution the drag was drawn in.
+	const float scaleX = (float)outputWidth / (float)ovi.base_width;
+	const float scaleY = (float)outputHeight / (float)ovi.base_height;
+
+	const int roiLeft = (int)std::clamp(std::round(std::min(left, right) * scaleX), 0.0f, (float)outputWidth);
+	const int roiTop = (int)std::clamp(std::round(std::min(top, bottom) * scaleY), 0.0f, (float)outputHeight);
+	const int roiRight = (int)std::clamp(std::round(std::max(left, right) * scaleX), 0.0f, (float)outputWidth);
+	const int roiBottom = (int)std::clamp(std::round(std::max(top, bottom) * scaleY), 0.0f, (float)outputHeight);
+
+	// An accidental click (no real drag) yields a near-zero rect - ignore
+	// it instead of saving a degenerate ROI.
+	if (roiRight - roiLeft < 8 || roiBottom - roiTop < 8)
+		return;
+
+	OBSDataAutoRelease settings = obs_service_get_settings(svc);
+	obs_data_set_bool(settings, "roi_enabled", true);
+	obs_data_set_int(settings, "roi_left", roiLeft);
+	obs_data_set_int(settings, "roi_top", roiTop);
+	obs_data_set_int(settings, "roi_right", roiRight);
+	obs_data_set_int(settings, "roi_bottom", roiBottom);
+
+	SaveService();
+
+	// Refreshes the passive overlay to the rect just saved above, instead
+	// of leaving it showing whatever was there before this drag.
+	UpdateRoiSelectButton();
+
+	ui->statusbar->showMessage(QTStr("Basic.Main.Preview.SetRoi.Saved")
+					    .arg(roiLeft)
+					    .arg(roiTop)
+					    .arg(roiRight)
+					    .arg(roiBottom),
+				    5000);
 }
 
 void OBSBasic::PreviewScalingModeChanged(int value)

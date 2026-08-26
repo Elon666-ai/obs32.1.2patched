@@ -426,6 +426,12 @@ OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new 
 	connect(ui->previewZoomInButton, &QPushButton::clicked, ui->preview, &OBSBasicPreview::increaseScalingLevel);
 	connect(ui->previewZoomOutButton, &QPushButton::clicked, ui->preview, &OBSBasicPreview::decreaseScalingLevel);
 
+	/* Manual ROI select tool (WHIP only - see UpdateRoiSelectButton()) */
+	connect(ui->previewRoiSelectButton, &QPushButton::toggled, ui->preview, &OBSBasicPreview::SetRoiSelectMode);
+	connect(ui->preview, &OBSBasicPreview::roiSelectModeChanged, ui->previewRoiSelectButton,
+		&QPushButton::setChecked);
+	connect(ui->preview, &OBSBasicPreview::roiRegionSelected, this, &OBSBasic::OnRoiRegionSelected);
+
 	/* Preview Actions */
 	connect(ui->actionScaleWindow, &QAction::triggered, this, &OBSBasic::setPreviewScalingWindow);
 	connect(ui->actionScaleCanvas, &QAction::triggered, this, &OBSBasic::setPreviewScalingCanvas);
@@ -1409,6 +1415,7 @@ void OBSBasic::OnFirstLoad()
 
 	ApplyTemporalDenoiseSetting();
 	ApplyBeautyFilterSetting();
+	UpdateRoiSelectButton();
 
 	bool showLogViewerOnStartup = config_get_bool(App()->GetUserConfig(), "LogViewer", "ShowLogStartup");
 
@@ -1461,25 +1468,25 @@ void OBSBasic::ApplyBeautyFilterSetting()
 	auto cb = [](void *param, obs_source_t *source) -> bool {
 		const bool enable = *static_cast<bool *>(param);
 
-		// Cameras and media-file playback both deliver async CPU
-		// frames the beauty filter can process; the filter is a
-		// passthrough on frames without a detected face either way.
-		const char *id = obs_source_get_id(source);
-		if (strcmp(id, "dshow_input") != 0 && strcmp(id, "ffmpeg_source") != 0)
-			return true;
+		// Live camera capture only - media-file/network playback (e.g.
+		// a pre-recorded video used as the broadcast) must never get
+		// the "live face" beauty treatment.
+		const bool isCamera = strcmp(obs_source_get_id(source), "dshow_input") == 0;
 
 		// The auto-managed instance is identified by its fixed name;
 		// manually added copies of the filter are left alone.
 		OBSSourceAutoRelease existing = obs_source_get_filter_by_name(source, BEAUTY_FILTER_AUTO_NAME);
 
-		if (enable && !existing) {
+		if (enable && isCamera && !existing) {
 			OBSSourceAutoRelease filter =
 				obs_source_create_private(BEAUTY_FILTER_ID, BEAUTY_FILTER_AUTO_NAME, nullptr);
 			if (filter) {
 				obs_source_filter_add(source, filter);
 				blog(LOG_INFO, "Face beauty: attached to '%s'", obs_source_get_name(source));
 			}
-		} else if (!enable && existing) {
+		} else if ((!enable || !isCamera) && existing) {
+			// Also strips any instance left over on a non-camera
+			// source from before this restriction existed.
 			obs_source_filter_remove(source, existing);
 			blog(LOG_INFO, "Face beauty: removed from '%s'", obs_source_get_name(source));
 		}

@@ -19,6 +19,9 @@
 #include <QSpinBox>
 #include <QUuid>
 
+#include <algorithm>
+#include <cmath>
+
 static const QUuid &CustomServerUUID()
 {
 	static const QUuid uuid = QUuid::fromString(QT_UTF8("{241da255-70f2-4bbb-bef7-509695bf8e65}"));
@@ -230,11 +233,71 @@ void OBSBasicSettings::LoadStream1Settings()
 		ui->backupServer->setText(QT_UTF8(backup_server));
 		ui->backupServerLabel->setVisible(true);
 		ui->backupServer->setVisible(true);
+
+		ui->manualRoiGroupBox->show();
+
+		// obs_service_get_settings() never merges WHIPService::Defaults()
+		// into the returned object (see the matching comment in
+		// WHIPOutput::ApplyRoi()), so the intended fallbacks have to be
+		// re-registered here before reading them back too. +-3 QP (see
+		// the roiPriority/roiBgPriority conversion below) is the default
+		// "inside looks ~2x the quality of outside" split: QP is a log-
+		// ish scale where a 6-QP gap corresponds to roughly a 2x
+		// difference in bits spent for the same visual complexity, split
+		// evenly here between boosting the box and cutting the
+		// background.
+		obs_data_set_default_double(settings, "roi_priority", 3.0 / 51.0);
+		obs_data_set_default_double(settings, "roi_bg_priority", -3.0 / 51.0);
+
+		int64_t roiLeft = obs_data_get_int(settings, "roi_left");
+		int64_t roiTop = obs_data_get_int(settings, "roi_top");
+		int64_t roiRight = obs_data_get_int(settings, "roi_right");
+		int64_t roiBottom = obs_data_get_int(settings, "roi_bottom");
+
+		if (roiRight <= roiLeft || roiBottom <= roiTop) {
+			// No valid rectangle saved yet (fresh service, or the
+			// 0/0/0/0 built-in default) - prefill a small box centered
+			// on the frame instead of leaving 0-size fields, so ticking
+			// the checkbox alone does something sensible. 320x180 (or
+			// 180x320 turned sideways for a portrait canvas) is a
+			// deliberately modest seed to drag/resize from, not a guess
+			// at the user's actual subject size.
+			uint32_t outputWidth, outputHeight;
+			GetWHIPSimulcastMainResolution(outputWidth, outputHeight);
+
+			const bool landscape = outputWidth >= outputHeight;
+			const uint32_t boxW = std::min(outputWidth, (uint32_t)(landscape ? 320 : 180));
+			const uint32_t boxH = std::min(outputHeight, (uint32_t)(landscape ? 180 : 320));
+
+			roiLeft = (outputWidth - boxW) / 2;
+			roiTop = (outputHeight - boxH) / 2;
+			roiRight = roiLeft + boxW;
+			roiBottom = roiTop + boxH;
+		}
+
+		ui->manualRoiGroupBox->setChecked(obs_data_get_bool(settings, "roi_enabled"));
+		ui->roiLeft->setValue((int)roiLeft);
+		ui->roiTop->setValue((int)roiTop);
+		ui->roiRight->setValue((int)roiRight);
+		ui->roiBottom->setValue((int)roiBottom);
+
+		// roi_priority/roi_bg_priority are libobs encoder-ROI priority
+		// values (-1..1, see obs-encoder.h), which x264/NVENC convert to
+		// a per-macroblock QP offset via qp_offset = -51 * priority (AV1
+		// uses a wider 0-255 QP range and scales by 128 instead, but 51
+		// is the right constant for the H.264/HEVC encoders this app
+		// actually targets). Showing that QP offset directly instead of
+		// the raw priority fraction is a lot more meaningful to anyone
+		// who has tuned an encoder before.
+		ui->roiPriority->setValue((int)std::lround(obs_data_get_double(settings, "roi_priority") * -51.0));
+		ui->roiBgPriority->setValue((int)std::lround(obs_data_get_double(settings, "roi_bg_priority") * -51.0));
 	} else {
 		ui->key->setText(key);
 		ui->whipSimulcastGroupBox->hide();
 		ui->backupServerLabel->setVisible(false);
 		ui->backupServer->setVisible(false);
+
+		ui->manualRoiGroupBox->hide();
 	}
 
 	ServiceChanged(true);
@@ -341,6 +404,19 @@ void OBSBasicSettings::SaveStream1Settings()
 		// stream start without reaching into frontend config.
 		obs_data_set_bool(settings, "detect_roi", ui->detectRoiEnable->isChecked());
 		obs_data_set_bool(settings, "quality_score", ui->qualityScoreEnable->isChecked());
+
+		// Manually-configured ROI rectangle - see WHIPOutput::ApplyRoi(),
+		// which gives this precedence over the detector above whenever
+		// it's enabled.
+		obs_data_set_bool(settings, "roi_enabled", ui->manualRoiGroupBox->isChecked());
+		obs_data_set_int(settings, "roi_left", ui->roiLeft->value());
+		obs_data_set_int(settings, "roi_top", ui->roiTop->value());
+		obs_data_set_int(settings, "roi_right", ui->roiRight->value());
+		obs_data_set_int(settings, "roi_bottom", ui->roiBottom->value());
+
+		// Inverse of the QP -> priority conversion in LoadStream1Settings().
+		obs_data_set_double(settings, "roi_priority", ui->roiPriority->value() / -51.0);
+		obs_data_set_double(settings, "roi_bg_priority", ui->roiBgPriority->value() / -51.0);
 	} else {
 		obs_data_set_string(settings, "key", QT_TO_UTF8(ui->key->text()));
 	}
@@ -367,6 +443,7 @@ void OBSBasicSettings::SaveStream1Settings()
 	SaveCheckBox(ui->beautyFilterEnable, "Stream1", "BeautyFilter");
 	main->ApplyTemporalDenoiseSetting();
 	main->ApplyBeautyFilterSetting();
+	main->UpdateRoiSelectButton();
 
 	auto oldWHIPSimulcastTotalLayers = config_get_int(main->Config(), "Stream1", "WHIPSimulcastTotalLayers");
 	SaveSpinBox(ui->whipSimulcastTotalLayers, "Stream1", "WHIPSimulcastTotalLayers");
@@ -909,10 +986,12 @@ void OBSBasicSettings::on_service_currentIndexChanged(int idx)
 		ui->whipSimulcastGroupBox->show();
 		ui->backupServerLabel->setVisible(true);
 		ui->backupServer->setVisible(true);
+		ui->manualRoiGroupBox->show();
 	} else {
 		ui->whipSimulcastGroupBox->hide();
 		ui->backupServerLabel->setVisible(false);
 		ui->backupServer->setVisible(false);
+		ui->manualRoiGroupBox->hide();
 	}
 }
 
