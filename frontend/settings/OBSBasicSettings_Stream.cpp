@@ -239,15 +239,13 @@ void OBSBasicSettings::LoadStream1Settings()
 		// obs_service_get_settings() never merges WHIPService::Defaults()
 		// into the returned object (see the matching comment in
 		// WHIPOutput::ApplyRoi()), so the intended fallbacks have to be
-		// re-registered here before reading them back too. +-3 QP (see
-		// the roiPriority/roiBgPriority conversion below) is the default
-		// "inside looks ~2x the quality of outside" split: QP is a log-
-		// ish scale where a 6-QP gap corresponds to roughly a 2x
-		// difference in bits spent for the same visual complexity, split
-		// evenly here between boosting the box and cutting the
-		// background.
-		obs_data_set_default_double(settings, "roi_priority", 3.0 / 51.0);
-		obs_data_set_default_double(settings, "roi_bg_priority", -3.0 / 51.0);
+		// re-registered here before reading them back too. Default +6 QP
+		// inside / -8 QP outside (see the roiPriority/roiBgPriority
+		// conversion below), Manual ROI off by default (the Ball & Person
+		// detector handles the moving-subject case instead).
+		obs_data_set_default_double(settings, "roi_priority", 6.0 / 51.0);
+		obs_data_set_default_double(settings, "roi_bg_priority", -8.0 / 51.0);
+		obs_data_set_default_bool(settings, "roi_enabled", false);
 
 		int64_t roiLeft = obs_data_get_int(settings, "roi_left");
 		int64_t roiTop = obs_data_get_int(settings, "roi_top");
@@ -256,23 +254,26 @@ void OBSBasicSettings::LoadStream1Settings()
 
 		if (roiRight <= roiLeft || roiBottom <= roiTop) {
 			// No valid rectangle saved yet (fresh service, or the
-			// 0/0/0/0 built-in default) - prefill a small box centered
-			// on the frame instead of leaving 0-size fields, so ticking
-			// the checkbox alone does something sensible. 320x180 (or
-			// 180x320 turned sideways for a portrait canvas) is a
-			// deliberately modest seed to drag/resize from, not a guess
-			// at the user's actual subject size.
+			// 0/0/0/0 built-in default) - prefill a box hugging this
+			// production's actual subject (three number wheels, with the
+			// host standing in front of the middle one), measured off a
+			// reference frame of the set: x 30%-66%, y 23%-97%.
+			// Deliberately tight: the sky, thatched roof, palm trees and
+			// sand left outside are bit budget redirected into the wheel
+			// digits and the host's face, which is the entire point of
+			// the ROI - a box loose enough to "safely" include the
+			// scenery spreads the same boost over ~1.7x the area and
+			// visibly blunts it. Bottom stops just below the host's feet
+			// rather than at the wheel platform, so her lower body
+			// doesn't fall into the harshly-compressed background.
+			// Still only a seed to drag/resize from, not a precise crop.
 			uint32_t outputWidth, outputHeight;
 			GetWHIPSimulcastMainResolution(outputWidth, outputHeight);
 
-			const bool landscape = outputWidth >= outputHeight;
-			const uint32_t boxW = std::min(outputWidth, (uint32_t)(landscape ? 320 : 180));
-			const uint32_t boxH = std::min(outputHeight, (uint32_t)(landscape ? 180 : 320));
-
-			roiLeft = (outputWidth - boxW) / 2;
-			roiTop = (outputHeight - boxH) / 2;
-			roiRight = roiLeft + boxW;
-			roiBottom = roiTop + boxH;
+			roiLeft = outputWidth * 30 / 100;
+			roiTop = outputHeight * 23 / 100;
+			roiRight = outputWidth * 66 / 100;
+			roiBottom = outputHeight * 97 / 100;
 		}
 
 		ui->manualRoiGroupBox->setChecked(obs_data_get_bool(settings, "roi_enabled"));
@@ -286,10 +287,11 @@ void OBSBasicSettings::LoadStream1Settings()
 		// a per-macroblock QP offset via qp_offset = -51 * priority (AV1
 		// uses a wider 0-255 QP range and scales by 128 instead, but 51
 		// is the right constant for the H.264/HEVC encoders this app
-		// actually targets). Showing that QP offset directly instead of
-		// the raw priority fraction is a lot more meaningful to anyone
-		// who has tuned an encoder before.
-		ui->roiPriority->setValue((int)std::lround(obs_data_get_double(settings, "roi_priority") * -51.0));
+		// actually targets). roi_priority is constrained to [0,1] and
+		// roi_bg_priority to [-1,0] (see WHIPOutput::ApplyRoi()), so each
+		// spinbox shows an unsigned QP magnitude - sign is implied by
+		// which field it is, not part of the displayed number.
+		ui->roiPriority->setValue((int)std::lround(obs_data_get_double(settings, "roi_priority") * 51.0));
 		ui->roiBgPriority->setValue((int)std::lround(obs_data_get_double(settings, "roi_bg_priority") * -51.0));
 	} else {
 		ui->key->setText(key);
@@ -415,7 +417,7 @@ void OBSBasicSettings::SaveStream1Settings()
 		obs_data_set_int(settings, "roi_bottom", ui->roiBottom->value());
 
 		// Inverse of the QP -> priority conversion in LoadStream1Settings().
-		obs_data_set_double(settings, "roi_priority", ui->roiPriority->value() / -51.0);
+		obs_data_set_double(settings, "roi_priority", ui->roiPriority->value() / 51.0);
 		obs_data_set_double(settings, "roi_bg_priority", ui->roiBgPriority->value() / -51.0);
 	} else {
 		obs_data_set_string(settings, "key", QT_TO_UTF8(ui->key->text()));

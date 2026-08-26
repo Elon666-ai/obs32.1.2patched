@@ -737,7 +737,7 @@ bool OBSBasic::InitBasicConfigDefaults()
 
 	config_set_default_bool(activeConfiguration, "Stream1", "IgnoreRecommended", false);
 	config_set_default_bool(activeConfiguration, "Stream1", "TemporalDenoise", true);
-	config_set_default_bool(activeConfiguration, "Stream1", "BeautyFilter", true);
+	config_set_default_bool(activeConfiguration, "Stream1", "BeautyFilter", false);
 	config_set_default_bool(activeConfiguration, "Stream1", "DetectRoi", true);
 	config_set_default_bool(activeConfiguration, "Stream1", "QualityScore", true);
 	config_set_default_bool(activeConfiguration, "Stream1", "EnableMultitrackVideo", false);

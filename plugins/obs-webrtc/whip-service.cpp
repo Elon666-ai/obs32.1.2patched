@@ -42,22 +42,29 @@ obs_properties_t *WHIPService::Properties()
 void WHIPService::Defaults(obs_data_t *defaults)
 {
 	// Master switch for detection-driven ROI (balls + people), set from
-	// Settings > Stream > Advanced Options; default on.
+	// Settings > Stream > Advanced Options; default on - it tracks a
+	// moving subject, which the fixed Manual ROI rectangle below cannot,
+	// so it is the better default for live camera work.
 	obs_data_set_default_bool(defaults, "detect_roi", true);
 	// Full-reference quality score of the outgoing stream (program feed
 	// = 100), same settings page; default on.
 	obs_data_set_default_bool(defaults, "quality_score", true);
+	// Off by default: a fixed rectangle only suits a locked-off shot, and
+	// it takes precedence over the detector above whenever it is on (see
+	// WHIPOutput::ApplyRoi()), so defaulting it on would silently disable
+	// the tracking.
 	obs_data_set_default_bool(defaults, "roi_enabled", false);
 	obs_data_set_default_int(defaults, "roi_left", 0);
 	obs_data_set_default_int(defaults, "roi_top", 0);
 	obs_data_set_default_int(defaults, "roi_right", 0);
 	obs_data_set_default_int(defaults, "roi_bottom", 0);
-	// +-3 QP (see WHIPOutput::ApplyRoi()'s matching re-seed and
-	// OBSBasicSettings::LoadStream1Settings()'s QP<->priority
-	// conversion) - roughly "inside looks 2x the quality of outside"
-	// under the ~6-QP-per-2x-bitrate rule of thumb.
-	obs_data_set_default_double(defaults, "roi_priority", 3.0 / 51.0);
-	obs_data_set_default_double(defaults, "roi_bg_priority", -3.0 / 51.0);
+	// Default +6 QP inside / -8 QP outside (see WHIPOutput::ApplyRoi()'s
+	// matching re-seed and OBSBasicSettings::LoadStream1Settings()'s
+	// QP<->priority conversion). roi_priority is constrained to [0,1] and
+	// roi_bg_priority to [-1,0], so each is an unsigned QP magnitude with
+	// the sign implied by which field it is.
+	obs_data_set_default_double(defaults, "roi_priority", 6.0 / 51.0);
+	obs_data_set_default_double(defaults, "roi_bg_priority", -8.0 / 51.0);
 }
 
 void WHIPService::ApplyEncoderSettings(obs_data_t *video_settings, obs_data_t *)
