@@ -318,6 +318,7 @@ void OBSBasicSettings::LoadStream1Settings()
 	ui->detectRoiEnable->setChecked(config_get_bool(main->Config(), "Stream1", "DetectRoi"));
 	ui->qualityScoreEnable->setChecked(config_get_bool(main->Config(), "Stream1", "QualityScore"));
 	ui->beautyFilterEnable->setChecked(config_get_bool(main->Config(), "Stream1", "BeautyFilter"));
+	ui->clarityFilterEnable->setChecked(config_get_bool(main->Config(), "Stream1", "ClarityFilter"));
 	ui->whipSimulcastTotalLayers->setValue(whipSimulcastTotalLayers);
 	RebuildWHIPSimulcastLayerRows();
 
@@ -443,8 +444,10 @@ void OBSBasicSettings::SaveStream1Settings()
 	SaveCheckBox(ui->detectRoiEnable, "Stream1", "DetectRoi");
 	SaveCheckBox(ui->qualityScoreEnable, "Stream1", "QualityScore");
 	SaveCheckBox(ui->beautyFilterEnable, "Stream1", "BeautyFilter");
+	SaveCheckBox(ui->clarityFilterEnable, "Stream1", "ClarityFilter");
 	main->ApplyTemporalDenoiseSetting();
 	main->ApplyBeautyFilterSetting();
+	main->ApplyClarityFilterSetting();
 	main->UpdateRoiSelectButton();
 
 	auto oldWHIPSimulcastTotalLayers = config_get_int(main->Config(), "Stream1", "WHIPSimulcastTotalLayers");

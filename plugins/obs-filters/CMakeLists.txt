@@ -8,6 +8,7 @@ target_sources(
   PRIVATE
     async-delay-filter.c
     chroma-key-filter.c
+    clarity-filter.c
     color-correction-filter.c
     color-grade-filter.c
     color-key-filter.c

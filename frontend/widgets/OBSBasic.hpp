@@ -1438,6 +1438,11 @@ public:
 	// it blanket-style to cameras is a no-op for faceless content.
 	void ApplyBeautyFilterSetting();
 
+	// Same enforcement pattern for the "Clarity" checkbox
+	// ("Stream1"/"ClarityFilter"): attaches clarity_filter (GPU local
+	// contrast enhancement) to every camera (dshow_input) source.
+	void ApplyClarityFilterSetting();
+
 	// Shows/enables ui->previewRoiSelectButton only while the active
 	// service is WHIP and no stream is active (manual ROI is WHIP-only,
 	// and the settings page it also lives on is disabled while

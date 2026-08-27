@@ -57,6 +57,7 @@ void OBSBasic::StartStreaming()
 	// encoders see any frames.
 	ApplyTemporalDenoiseSetting();
 	ApplyBeautyFilterSetting();
+	ApplyClarityFilterSetting();
 
 	if (auth && auth->broadcastFlow()) {
 		if (!broadcastActive && !broadcastReady) {
