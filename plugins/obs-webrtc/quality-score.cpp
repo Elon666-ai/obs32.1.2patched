@@ -24,6 +24,15 @@ static constexpr size_t MAX_REFS = 180;
 static constexpr size_t MAX_QUEUE = 120;
 static constexpr int64_t SAMPLE_INTERVAL_US = 500000; /* 2 scored frames/s */
 static constexpr int64_t REPORT_INTERVAL_US = 10000000; /* one log line / 10s */
+/* Window average below which the periodic score line is emitted as a
+ * warning rather than info. The score is mean Y-SSIM x 100 against the
+ * program feed, where the high 80s is ordinary streaming compression;
+ * sustained sub-80 means the encode is visibly costing picture quality
+ * (starved bitrate, a ROI region eating the budget, a resolution the
+ * encoder can't hold), which is what someone reads the log to find. It
+ * raises the level of the existing line instead of adding a second one,
+ * so a window still produces exactly one score entry. */
+static constexpr double SCORE_WARN_THRESHOLD = 80.0;
 /* Persistent avcodec errors (corrupt feed, unsupported profile) turn
  * the scorer off instead of spamming the log every packet. */
 static constexpr uint32_t MAX_CONSECUTIVE_ERRORS = 30;
@@ -458,11 +467,12 @@ void QualityScorer::CompareFrame(AVFrame *frame)
 	reported_resyncs = total_resyncs;
 
 	if (win_samples) {
-		blog(LOG_INFO,
+		const double avg_score = win_ssim_sum / win_samples * 100.0;
+
+		blog(avg_score < SCORE_WARN_THRESHOLD ? LOG_WARNING : LOG_INFO,
 		     "[obs-webrtc] stream quality score: %.1f avg / %.1f min of 100 "
 		     "(Y-SSIM vs program feed, PSNR %.1f dB avg, %u samples)",
-		     win_ssim_sum / win_samples * 100.0, win_ssim_min * 100.0, win_psnr_sum / win_samples,
-		     win_samples);
+		     avg_score, win_ssim_min * 100.0, win_psnr_sum / win_samples, win_samples);
 	}
 	if (win_misses || win_decode_errors || new_resyncs) {
 		blog(LOG_WARNING,
