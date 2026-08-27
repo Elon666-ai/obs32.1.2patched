@@ -2527,7 +2527,7 @@
                     <string>Basic.Settings.Stream.DetectRoi</string>
                    </property>
                    <property name="checked">
-                    <bool>true</bool>
+                    <bool>false</bool>
                    </property>
                   </widget>
                  </item>
@@ -2545,6 +2545,16 @@
                   <widget class="QCheckBox" name="beautyFilterEnable">
                    <property name="text">
                     <string>Basic.Settings.Stream.BeautyFilter</string>
+                   </property>
+                   <property name="checked">
+                    <bool>false</bool>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="8" column="1">
+                  <widget class="QCheckBox" name="clarityFilterEnable">
+                   <property name="text">
+                    <string>Basic.Settings.Stream.ClarityFilter</string>
                    </property>
                    <property name="checked">
                     <bool>true</bool>

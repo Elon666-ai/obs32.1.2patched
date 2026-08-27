@@ -738,7 +738,8 @@ bool OBSBasic::InitBasicConfigDefaults()
 	config_set_default_bool(activeConfiguration, "Stream1", "IgnoreRecommended", false);
 	config_set_default_bool(activeConfiguration, "Stream1", "TemporalDenoise", true);
 	config_set_default_bool(activeConfiguration, "Stream1", "BeautyFilter", false);
-	config_set_default_bool(activeConfiguration, "Stream1", "DetectRoi", true);
+	config_set_default_bool(activeConfiguration, "Stream1", "ClarityFilter", true);
+	config_set_default_bool(activeConfiguration, "Stream1", "DetectRoi", false);
 	config_set_default_bool(activeConfiguration, "Stream1", "QualityScore", true);
 	config_set_default_bool(activeConfiguration, "Stream1", "EnableMultitrackVideo", false);
 	config_set_default_bool(activeConfiguration, "Stream1", "MultitrackVideoMaximumAggregateBitrateAuto", true);
@@ -1415,6 +1416,7 @@ void OBSBasic::OnFirstLoad()
 
 	ApplyTemporalDenoiseSetting();
 	ApplyBeautyFilterSetting();
+	ApplyClarityFilterSetting();
 	UpdateRoiSelectButton();
 
 	bool showLogViewerOnStartup = config_get_bool(App()->GetUserConfig(), "LogViewer", "ShowLogStartup");
@@ -1489,6 +1491,41 @@ void OBSBasic::ApplyBeautyFilterSetting()
 			// source from before this restriction existed.
 			obs_source_filter_remove(source, existing);
 			blog(LOG_INFO, "Face beauty: removed from '%s'", obs_source_get_name(source));
+		}
+
+		return true;
+	};
+
+	obs_enum_sources(cb, &enabled);
+}
+
+static const char *CLARITY_FILTER_ID = "clarity_filter";
+static const char *CLARITY_FILTER_AUTO_NAME = "Clarity (Auto)";
+
+void OBSBasic::ApplyClarityFilterSetting()
+{
+	bool enabled = config_get_bool(activeConfiguration, "Stream1", "ClarityFilter");
+
+	auto cb = [](void *param, obs_source_t *source) -> bool {
+		const bool enable = *static_cast<bool *>(param);
+
+		if (strcmp(obs_source_get_id(source), "dshow_input") != 0)
+			return true;
+
+		// The auto-managed instance is identified by its fixed name;
+		// manually added copies of the filter are left alone.
+		OBSSourceAutoRelease existing = obs_source_get_filter_by_name(source, CLARITY_FILTER_AUTO_NAME);
+
+		if (enable && !existing) {
+			OBSSourceAutoRelease filter =
+				obs_source_create_private(CLARITY_FILTER_ID, CLARITY_FILTER_AUTO_NAME, nullptr);
+			if (filter) {
+				obs_source_filter_add(source, filter);
+				blog(LOG_INFO, "Clarity: attached to '%s'", obs_source_get_name(source));
+			}
+		} else if (!enable && existing) {
+			obs_source_filter_remove(source, existing);
+			blog(LOG_INFO, "Clarity: removed from '%s'", obs_source_get_name(source));
 		}
 
 		return true;

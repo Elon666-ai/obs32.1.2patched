@@ -416,6 +416,7 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 	HookWidget(ui->detectRoiEnable,      CHECK_CHANGED,  STREAM1_CHANGED);
 	HookWidget(ui->qualityScoreEnable,   CHECK_CHANGED,  STREAM1_CHANGED);
 	HookWidget(ui->beautyFilterEnable,   CHECK_CHANGED,  STREAM1_CHANGED);
+	HookWidget(ui->clarityFilterEnable,  CHECK_CHANGED,  STREAM1_CHANGED);
 	HookWidget(ui->whipSimulcastTotalLayers, SCROLL_CHANGED, STREAM1_CHANGED);
 	HookWidget(ui->manualRoiGroupBox,    GROUP_CHANGED,  STREAM1_CHANGED);
 	HookWidget(ui->roiLeft,              SCROLL_CHANGED, STREAM1_CHANGED);

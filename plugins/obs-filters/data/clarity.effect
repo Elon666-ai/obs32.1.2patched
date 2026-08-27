@@ -1,0 +1,98 @@
+/*
+ * Clarity: local mid-tone contrast enhancement (single pass).
+ *
+ * Classic "clarity" is unsharp masking with a large blur radius, with
+ * the boost weighted toward mid-tones so shadows don't crush and
+ * highlights don't clip. The base (low-frequency) image is estimated
+ * with a sparse 13-tap Poisson-disc-style ring sample at `radius`
+ * pixels, which is a good enough Gaussian stand-in for a base estimate
+ * at a fraction of the cost of a separable two-pass blur.
+ *
+ * The detail term operates on luma only - boosting RGB independently
+ * shifts hue on saturated edges - and the result re-applies the
+ * original chroma.
+ */
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float strength;      /* 0..1 slider */
+uniform float texture_width;
+uniform float texture_height;
+
+sampler_state def_sampler {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertInOut {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertInOut VSDefault(VertInOut vert_in)
+{
+	VertInOut vert_out;
+	vert_out.pos = mul(float4(vert_in.pos.xyz, 1.0), ViewProj);
+	vert_out.uv  = vert_in.uv;
+	return vert_out;
+}
+
+float lum(float3 c)
+{
+	return dot(c, float3(0.2126, 0.7152, 0.0722));
+}
+
+float4 PSClarity(VertInOut vert_in) : TARGET
+{
+	float4 orig = image.Sample(def_sampler, vert_in.uv);
+
+	float2 ps = float2(1.0 / texture_width, 1.0 / texture_height);
+	/* base radius scales with resolution so the look matches across
+	 * 720p/1080p/4k: ~7px at 1080p */
+	float radius = max(texture_height * (7.0 / 1080.0), 3.0);
+
+	/* 12 ring taps + center: two interleaved hexagons at r and r/2 */
+	float base = lum(orig.rgb);
+	float2 r1 = ps * radius;
+	float2 r2 = ps * radius * 0.5;
+	base += lum(image.Sample(def_sampler, vert_in.uv + float2( 1.000,  0.000) * r1).rgb);
+	base += lum(image.Sample(def_sampler, vert_in.uv + float2( 0.500,  0.866) * r1).rgb);
+	base += lum(image.Sample(def_sampler, vert_in.uv + float2(-0.500,  0.866) * r1).rgb);
+	base += lum(image.Sample(def_sampler, vert_in.uv + float2(-1.000,  0.000) * r1).rgb);
+	base += lum(image.Sample(def_sampler, vert_in.uv + float2(-0.500, -0.866) * r1).rgb);
+	base += lum(image.Sample(def_sampler, vert_in.uv + float2( 0.500, -0.866) * r1).rgb);
+	base += lum(image.Sample(def_sampler, vert_in.uv + float2( 0.866,  0.500) * r2).rgb);
+	base += lum(image.Sample(def_sampler, vert_in.uv + float2( 0.000,  1.000) * r2).rgb);
+	base += lum(image.Sample(def_sampler, vert_in.uv + float2(-0.866,  0.500) * r2).rgb);
+	base += lum(image.Sample(def_sampler, vert_in.uv + float2(-0.866, -0.500) * r2).rgb);
+	base += lum(image.Sample(def_sampler, vert_in.uv + float2( 0.000, -1.000) * r2).rgb);
+	base += lum(image.Sample(def_sampler, vert_in.uv + float2( 0.866, -0.500) * r2).rgb);
+	base /= 13.0;
+
+	float y = lum(orig.rgb);
+	float detail = y - base;
+
+	/* mid-tone weight: full boost at y=0.5, fading to 0 at both ends
+	 * so shadows don't block up and highlights don't clip */
+	float mid = saturate(1.0 - 4.0 * (y - 0.5) * (y - 0.5));
+
+	/* soft-limit the detail term so strong edges don't halo */
+	float boosted = detail * strength * 1.5 * mid;
+	boosted = clamp(boosted, -0.15, 0.15);
+
+	float scale = (y > 0.0001) ? (y + boosted) / y : 1.0;
+	float3 rgb = saturate(orig.rgb * scale);
+
+	return float4(rgb, orig.a);
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSDefault(vert_in);
+		pixel_shader  = PSClarity(vert_in);
+	}
+}
