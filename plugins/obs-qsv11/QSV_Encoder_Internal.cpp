@@ -459,6 +459,17 @@ bool QSV_Encoder_Internal::UpdateParams(qsv_param_t *pParams)
 	switch (pParams->nRateControl) {
 	case MFX_RATECONTROL_CBR:
 		m_mfxEncParams.mfx.TargetKbps = pParams->nTargetBitRate;
+		break;
+	case MFX_RATECONTROL_VBR:
+		// Without this, a live bitrate update (obs_qsv_update ->
+		// qsv_encoder_reconfig) silently did nothing at all in VBR:
+		// only the CBR case above was handled, so an adaptive-bitrate
+		// caller had no effect on this encoder. MaxKbps has to move
+		// with the target or lowering the target just widens the gap
+		// the encoder is allowed to burst into.
+		m_mfxEncParams.mfx.TargetKbps = pParams->nTargetBitRate;
+		m_mfxEncParams.mfx.MaxKbps = pParams->nMaxBitRate;
+		break;
 	default:
 		break;
 	}

@@ -170,6 +170,33 @@ public:
 								  videoBitrate, outputWidth, outputHeight, width,
 								  height));
 				}
+
+				// The layer settings start as a copy of the
+				// main encoder's, so without this every layer
+				// would inherit the main layer's VBR ceiling
+				// while carrying a fraction of its target - a
+				// 480p layer with a few hundred Kbps of target
+				// allowed to burst to the full 1080p peak.
+				// Scaled by this layer's own target/main ratio
+				// so the peak/target headroom the user
+				// configured is the same on every layer,
+				// whether the target came from the area
+				// formula or from a custom per-layer value.
+				//
+				// Only meaningful in VBR; encoders that have no
+				// max_bitrate setting (x264) read 0 here and
+				// are left alone.
+				const int64_t layerBitrate = obs_data_get_int(layerSettings, "bitrate");
+				const int64_t mainMaxBitrate = obs_data_get_int(layerSettings, "max_bitrate");
+
+				if (mainMaxBitrate > 0 && videoBitrate > 0) {
+					int64_t layerMax = mainMaxBitrate * layerBitrate / videoBitrate;
+					// A ceiling below the target is not a
+					// ceiling.
+					if (layerMax < layerBitrate)
+						layerMax = layerBitrate;
+					obs_data_set_int(layerSettings, "max_bitrate", layerMax);
+				}
 			}
 
 			auto whip_simulcast_encoder =
