@@ -328,6 +328,33 @@ void WsDegradeClient::ApplyIfNeeded(const TargetState &target)
 			scaled = 1;
 		obs_data_set_int(s, "bitrate", (int)scaled);
 
+		// Under VBR the ceiling has to come down with the target, or
+		// a degrade only moves the floor: the server has just said
+		// the link can't carry the current rate, while the encoder
+		// stays free to burst to the original peak on complex
+		// content - exactly the wrong moment for it. Cached and
+		// scaled the same way as the target above, so the peak/target
+		// ratio the user configured survives repeated
+		// degrade/recover cycles.
+		//
+		// max_bitrate only means anything in VBR (NVENC and QSV both
+		// read it solely on that path), so this is a no-op under CBR;
+		// x264 has no such setting at all and reads 0 here, which
+		// skips the block.
+		int max_base = (int)obs_data_get_int(s, "base_max_bitrate");
+		if (max_base == 0)
+			max_base = (int)obs_data_get_int(s, "max_bitrate");
+
+		if (max_base > 0) {
+			obs_data_set_int(s, "base_max_bitrate", max_base);
+
+			long long scaled_max = (long long)max_base * target.bitrate_percent / 100LL;
+			// A ceiling below the target is not a ceiling.
+			if (scaled_max < scaled)
+				scaled_max = scaled;
+			obs_data_set_int(s, "max_bitrate", (int)scaled_max);
+		}
+
 		obs_encoder_update(enc, s);
 	}
 
