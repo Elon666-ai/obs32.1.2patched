@@ -133,6 +133,14 @@ WsDegradeClient::WsDegradeClient()
 
 	worker = std::thread([this]() {
 		while (running.load()) {
+			// run() stops the io_service once it has no work
+			// queued (e.g. before the first ConnectLocked(), or
+			// between a close and the next reconnect attempt).
+			// asio requires reset() before the next run() call,
+			// or every subsequent run() returns immediately
+			// without processing newly queued work.
+			if (client.stopped())
+				client.reset();
 			client.run();
 			// brief sleep to avoid busy-loop when no io work
 			os_sleep_ms(50);
