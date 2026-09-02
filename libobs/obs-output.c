@@ -541,15 +541,6 @@ void obs_output_stop(obs_output_t *output)
 		return;
 	if (!active(output) && !reconnecting(output))
 		return;
-	/* Diagnostic-only: obs_output_stop() and obs_output_force_stop()
-	 * (below) are the ONLY two places in all of libobs that reach
-	 * output->info.stop() (see obs_output_actual_stop()), so this is
-	 * the one chokepoint that will catch any caller - frontend, plugin,
-	 * or otherwise - that stops an output outside of the WHIP plugin's
-	 * own Disconnected/Failed/ApplyIfNeeded paths. */
-	blog(LOG_WARNING,
-	     "[diag] obs_output_stop() called for output '%s' active=%d reconnecting=%d stopping=%d",
-	     output->context.name, active(output), reconnecting(output), stopping(output));
 	if (reconnecting(output)) {
 		obs_output_force_stop(output);
 		return;
@@ -567,10 +558,6 @@ void obs_output_force_stop(obs_output_t *output)
 {
 	if (!obs_output_valid(output, "obs_output_force_stop"))
 		return;
-
-	/* Diagnostic-only: see matching comment in obs_output_stop() above. */
-	blog(LOG_WARNING, "[diag] obs_output_force_stop() called for output '%s' active=%d reconnecting=%d stopping=%d",
-	     output->context.name, active(output), reconnecting(output), stopping(output));
 
 	if (!stopping(output)) {
 		output->stop_code = 0;
