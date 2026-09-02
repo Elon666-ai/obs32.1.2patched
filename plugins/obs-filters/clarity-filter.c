@@ -127,7 +127,7 @@ static obs_properties_t *clarity_properties(void *data)
 
 static void clarity_defaults(obs_data_t *settings)
 {
-	obs_data_set_default_double(settings, "strength", 1.0);
+	obs_data_set_default_double(settings, "strength", 0.5);
 }
 
 static enum gs_color_space clarity_get_color_space(void *data, size_t count,
