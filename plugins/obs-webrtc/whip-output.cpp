@@ -219,6 +219,18 @@ bool WHIPOutput::Start()
 		reconnect_attempt = 0;
 	}
 
+	if (!obs_output_can_begin_data_capture(output, 0))
+		return false;
+	if (!obs_output_initialize_encoders(output, 0))
+		return false;
+
+	// Join the previous session's StopThread before touching
+	// videoLayerStates: StopThread() clears the map as its last act, so
+	// populating it first would race a still-running teardown and leave
+	// Data() dropping every video packet as "stale" for the whole session.
+	if (start_stop_thread.joinable())
+		start_stop_thread.join();
+
 	for (uint32_t idx = 0; idx < MAX_OUTPUT_VIDEO_ENCODERS; idx++) {
 		auto encoder = obs_output_get_video_encoder2(output, idx);
 		if (encoder == nullptr) {
@@ -231,11 +243,6 @@ bool WHIPOutput::Start()
 		v->rid = std::to_string(idx);
 		videoLayerStates[encoder] = v;
 	}
-
-	if (!obs_output_can_begin_data_capture(output, 0))
-		return false;
-	if (!obs_output_initialize_encoders(output, 0))
-		return false;
 
 	ApplyRoi();
 
@@ -260,8 +267,6 @@ bool WHIPOutput::Start()
 	WsDegradeClient::Instance().RegisterOutput(output);
 #endif
 
-	if (start_stop_thread.joinable())
-		start_stop_thread.join();
 	start_stop_thread = std::thread(&WHIPOutput::StartThread, this, generation);
 
 	return true;
@@ -271,8 +276,9 @@ void WHIPOutput::Stop(bool signal)
 {
 	// Whatever the reason we're stopping (user request, Failed state, or
 	// the grace timer below giving up), any pending Disconnected grace
-	// timer is now moot.
+	// timer and the liveness watchdog are now moot.
 	CancelDisconnectGraceTimer();
+	StopWatchdog();
 
 	motion_roi.Stop();
 	quality_scorer.Stop();
@@ -516,6 +522,20 @@ bool WHIPOutput::Init()
 		disconnect_grace_sec = 0;
 	if (reconnect_backoff_sec < 0)
 		reconnect_backoff_sec = 0;
+
+	watchdog_interval_sec = (int)obs_data_get_int(output_settings, "whip_watchdog_interval_sec");
+	watchdog_stall_sec = (int)obs_data_get_int(output_settings, "whip_watchdog_stall_sec");
+	if (!obs_data_has_user_value(output_settings, "whip_watchdog_interval_sec"))
+		watchdog_interval_sec = 10;
+	if (!obs_data_has_user_value(output_settings, "whip_watchdog_stall_sec"))
+		watchdog_stall_sec = 30;
+	if (watchdog_interval_sec < 0)
+		watchdog_interval_sec = 0;
+	// A stall threshold below the poll interval would fire on the very
+	// first tick; keep it at least one interval so a single slow poll
+	// can never be mistaken for a stalled stream.
+	if (watchdog_stall_sec > 0 && watchdog_stall_sec < watchdog_interval_sec)
+		watchdog_stall_sec = watchdog_interval_sec;
 
 	obs_service_t *service = obs_output_get_service(output);
 	if (!service) {
@@ -983,6 +1003,10 @@ void WHIPOutput::StartThread(uint64_t generation)
 
 	obs_output_begin_data_capture(output, 0);
 	running = true;
+
+	// Started only after data capture begins: before this point a flat
+	// byte counter is normal, and the connect path has its own timeouts.
+	StartWatchdog(generation);
 }
 
 void WHIPOutput::SendDelete(const std::string &resourceURL, uint64_t generation, const char *reason)
@@ -1117,11 +1141,20 @@ void WHIPOutput::MarkConnected()
 
 void WHIPOutput::PrepareReconnect()
 {
-	const int attempt = reconnect_attempt.fetch_add(1);
+	// fetch_add returns the *previous* value, so the first attempt must be
+	// scaled by attempt + 1. Scaling by the raw fetch_add result made the
+	// first reconnect wait 0s, which let libobs's reconnect thread call
+	// Start() before the previous session's end_data_capture_thread had
+	// cleared the output's "active" flag; Start() then failed on
+	// obs_output_can_begin_data_capture() and the output was left stuck
+	// in the reconnecting state (streaming at 0 bitrate) until manually
+	// restarted. reconnect_thread() in libobs now reschedules a failed
+	// start as well, but there is no reason to schedule a doomed attempt
+	// in the first place.
+	const int attempt = reconnect_attempt.fetch_add(1) + 1;
 	const int delay_sec = reconnect_backoff_sec * attempt;
 	obs_output_set_reconnect_delay(output, delay_sec * 1000);
-	do_log(LOG_INFO, "WHIP reconnect attempt %d: waiting %ds before next session",
-	       attempt + 1, delay_sec);
+	do_log(LOG_INFO, "WHIP reconnect attempt %d: waiting %ds before next session", attempt, delay_sec);
 }
 
 bool WHIPOutput::ShouldFallback(const std::string &backup_url)
@@ -1176,6 +1209,125 @@ void WHIPOutput::StartDisconnectGraceTimer(uint64_t generation)
 		Stop(false);
 		obs_output_signal_stop(output, OBS_OUTPUT_DISCONNECTED);
 	});
+}
+
+// -------------------------------------------------------------------
+// Periodic liveness watchdog.
+// -------------------------------------------------------------------
+//
+// The PeerConnection state machine only reports transport-level faults:
+// it says nothing when a session is nominally Connected and "running"
+// but has silently stopped pushing bytes. That gap is exactly how a
+// stuck output can sit there for hours looking healthy in the UI while
+// the far end receives nothing, with the log showing no clue beyond the
+// absence of new lines - which is not something anyone notices at 2am.
+//
+// So poll instead of trusting state transitions: every
+// whip_watchdog_interval_sec, log a one-line heartbeat with the byte
+// counter, and if the counter has not advanced for whip_watchdog_stall_sec
+// while we still believe we are running, treat it as a dead session and
+// hand it to the same teardown path a Failed PeerConnection would use.
+// Recovery deliberately goes through Stop(false) +
+// OBS_OUTPUT_DISCONNECTED rather than any bespoke restart logic, so a
+// stall reuses the one reconnect path that is already exercised by the
+// grace timer and by Failed.
+//
+// Set whip_watchdog_interval_sec to 0 to disable entirely, or
+// whip_watchdog_stall_sec to 0 to keep the heartbeat logging but never
+// act on it (useful when diagnosing whether a stall is real).
+void WHIPOutput::StartWatchdog(uint64_t generation)
+{
+	// Reap any previous session's watchdog first, before the disable
+	// check below can return early and strand it. Joining here cannot
+	// deadlock even though this runs on start_stop_thread and a tripped
+	// watchdog calls Stop(), which joins start_stop_thread: Stop() calls
+	// StopWatchdog() before it acquires start_stop_mutex, and Start()
+	// cannot spawn this StartThread without that same mutex. So a
+	// watchdog still inside Stop() and a running StartThread are mutually
+	// exclusive, and the thread stays owned (never detached) so it can't
+	// outlive us.
+	StopWatchdog();
+
+	if (watchdog_interval_sec <= 0) {
+		do_log(LOG_INFO, "Watchdog disabled");
+		return;
+	}
+
+	{
+		std::lock_guard<std::mutex> lk(watchdog_mutex);
+		watchdog_cancel = false;
+	}
+
+	if (watchdog_stall_sec > 0)
+		do_log(LOG_INFO, "Watchdog started: polling every %ds, reconnecting after %ds without progress",
+		       watchdog_interval_sec, watchdog_stall_sec);
+	else
+		do_log(LOG_INFO, "Watchdog started: polling every %ds, stall recovery disabled (heartbeat log only)",
+		       watchdog_interval_sec);
+
+	watchdog_thread = std::thread([this, generation]() {
+		size_t last_bytes = total_bytes_sent.load();
+		int64_t last_progress_ns = os_gettime_ns();
+
+		for (;;) {
+			std::unique_lock<std::mutex> lk(watchdog_mutex);
+			bool cancelled = watchdog_cv.wait_for(lk, std::chrono::seconds(watchdog_interval_sec),
+							      [this]() { return watchdog_cancel; });
+			lk.unlock();
+
+			if (cancelled)
+				return;
+			// A newer session has taken over; its own watchdog
+			// owns the check from here.
+			if (!IsActiveGeneration(generation))
+				return;
+
+			const size_t bytes = total_bytes_sent.load();
+			const int64_t now_ns = os_gettime_ns();
+
+			if (bytes != last_bytes) {
+				last_bytes = bytes;
+				last_progress_ns = now_ns;
+			}
+
+			const double stalled_sec = (double)(now_ns - last_progress_ns) / 1e9;
+
+			// Only meaningful once data capture has actually
+			// begun; before that a flat counter is expected.
+			if (!running) {
+				do_log(LOG_INFO, "Watchdog: connecting, %zu bytes sent so far", bytes);
+				continue;
+			}
+
+			if (watchdog_stall_sec > 0 && stalled_sec >= (double)watchdog_stall_sec) {
+				do_log(LOG_WARNING,
+				       "Watchdog: no bytes sent for %.0fs (threshold %ds) - treating session as dead, tearing down and reconnecting",
+				       stalled_sec, watchdog_stall_sec);
+				MarkDisconnected();
+				PrepareReconnect();
+				Stop(false);
+				obs_output_signal_stop(output, OBS_OUTPUT_DISCONNECTED);
+				return;
+			}
+
+			do_log(LOG_INFO, "Watchdog: alive, %zu bytes sent, %.0fs since last progress", bytes,
+			       stalled_sec);
+		}
+	});
+}
+
+void WHIPOutput::StopWatchdog()
+{
+	{
+		std::lock_guard<std::mutex> lk(watchdog_mutex);
+		watchdog_cancel = true;
+	}
+	watchdog_cv.notify_all();
+
+	// Same self-join guard as CancelDisconnectGraceTimer(): the watchdog
+	// thread itself calls Stop() -> StopWatchdog() when it trips.
+	if (watchdog_thread.joinable() && watchdog_thread.get_id() != std::this_thread::get_id())
+		watchdog_thread.join();
 }
 
 void WHIPOutput::CancelDisconnectGraceTimer()
