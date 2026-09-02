@@ -16,7 +16,15 @@ OBS Studio <https://obsproject.com>
 What is OBS Studio?
 -------------------
 
-obs32.1.2patched版本解决的问题：1.WHIP群播>1时出错 2.streaming-server重启时obs会停播
+OBS Studio is software designed for capturing, compositing, encoding,
+recording, and streaming video content, efficiently.
+
+It's distributed under the GNU General Public License v2 (or any later
+version) - see the accompanying COPYING file for more details.
+
+This is obs32.1.2patched, a fork of OBS Studio 32.1.2 with fixes for:
+1. WHIP Simulcast errors when more than one layer is configured.
+2. The stream stopping when the streaming server restarts.
 
 Quick Links
 -----------
