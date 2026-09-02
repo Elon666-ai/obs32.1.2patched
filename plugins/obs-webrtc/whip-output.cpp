@@ -328,6 +328,8 @@ void WHIPOutput::Data(struct encoder_packet *packet)
 	// worker thread inside datachannel.dll. Root-caused an OBS
 	// crash/hang after ~11h of overnight streaming.
 	std::shared_lock<std::shared_mutex> lk(tracks_mutex);
+	if (!running.load() || teardown_in_progress.load())
+		return;
 	std::shared_ptr<rtc::Track> local_audio_track = audio_track;
 	std::shared_ptr<rtc::Track> local_video_track = video_track;
 	std::shared_ptr<rtc::DataChannel> local_timestamp_channel = timestamp_channel;
@@ -653,6 +655,22 @@ bool WHIPOutput::Setup(uint64_t generation)
 			break;
 		case rtc::PeerConnection::State::Closed:
 			do_log(LOG_INFO, "PeerConnection state is now: Closed");
+			// A remote close can leave application-side tracks looking open
+			// while libdatachannel is destroying their transport. Invalidate
+			// them immediately so encoder threads cannot enter send() during
+			// that teardown window. Explicit StopThread() handles its own
+			// close under teardown_in_progress.
+			if (teardown_in_progress.load())
+				break;
+			running = false;
+			{
+				std::unique_lock<std::shared_mutex> lk(tracks_mutex);
+				audio_track = nullptr;
+				video_track = nullptr;
+				timestamp_channel = nullptr;
+				audio_sr_reporter = nullptr;
+				video_sr_reporter = nullptr;
+			}
 			break;
 		}
 	});
@@ -975,12 +993,16 @@ void WHIPOutput::StartThread(uint64_t generation)
 	if (!Connect(generation, attemptResourceURL)) {
 		MarkDisconnected();
 		{
+			teardown_in_progress = true;
 			std::unique_lock<std::shared_mutex> lk(tracks_mutex);
 			peer_connection->close();
 			peer_connection = nullptr;
 			audio_track = nullptr;
 			video_track = nullptr;
 			timestamp_channel = nullptr;
+			audio_sr_reporter = nullptr;
+			video_sr_reporter = nullptr;
+			teardown_in_progress = false;
 		}
 		return;
 	}
@@ -989,6 +1011,7 @@ void WHIPOutput::StartThread(uint64_t generation)
 		do_log(LOG_WARNING, "[WHIP generation=%llu] stale attempt became connected; deleting only its own resource",
 		       static_cast<unsigned long long>(generation));
 		{
+			teardown_in_progress = true;
 			std::unique_lock<std::shared_mutex> lk(tracks_mutex);
 			if (peer_connection)
 				peer_connection->close();
@@ -996,6 +1019,9 @@ void WHIPOutput::StartThread(uint64_t generation)
 			audio_track = nullptr;
 			video_track = nullptr;
 			timestamp_channel = nullptr;
+			audio_sr_reporter = nullptr;
+			video_sr_reporter = nullptr;
+			teardown_in_progress = false;
 		}
 		SendDelete(attemptResourceURL, generation, "stale_generation_after_connect");
 		return;
@@ -1076,12 +1102,16 @@ void WHIPOutput::StopThread(bool signal, uint64_t generation, std::string resour
 		       resourceURL.c_str());
 	}
 	if (peer_connection != nullptr) {
+		teardown_in_progress = true;
 		std::unique_lock<std::shared_mutex> lk(tracks_mutex);
 		peer_connection->close();
 		peer_connection = nullptr;
 		audio_track = nullptr;
 		video_track = nullptr;
 		timestamp_channel = nullptr;
+		audio_sr_reporter = nullptr;
+		video_sr_reporter = nullptr;
+		teardown_in_progress = false;
 	}
 
 	SendDelete(resourceURL, generation, signal ? "stop_thread" : "reconnect_or_error");

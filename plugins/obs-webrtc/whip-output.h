@@ -72,6 +72,7 @@ private:
 	std::atomic<uint64_t> active_generation;
 
 	std::atomic<bool> running;
+	std::atomic<bool> teardown_in_progress{false};
 
 	std::mutex start_stop_mutex;
 	std::mutex resource_mutex;
