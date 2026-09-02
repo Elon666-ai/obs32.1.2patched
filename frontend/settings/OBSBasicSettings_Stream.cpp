@@ -254,26 +254,16 @@ void OBSBasicSettings::LoadStream1Settings()
 
 		if (roiRight <= roiLeft || roiBottom <= roiTop) {
 			// No valid rectangle saved yet (fresh service, or the
-			// 0/0/0/0 built-in default) - prefill a box hugging this
-			// production's actual subject (three number wheels, with the
-			// host standing in front of the middle one), measured off a
-			// reference frame of the set: x 30%-66%, y 23%-97%.
-			// Deliberately tight: the sky, thatched roof, palm trees and
-			// sand left outside are bit budget redirected into the wheel
-			// digits and the host's face, which is the entire point of
-			// the ROI - a box loose enough to "safely" include the
-			// scenery spreads the same boost over ~1.7x the area and
-			// visibly blunts it. Bottom stops just below the host's feet
-			// rather than at the wheel platform, so her lower body
-			// doesn't fall into the harshly-compressed background.
-			// Still only a seed to drag/resize from, not a precise crop.
+			// 0/0/0/0 built-in default) - prefill a generic centered
+			// box as a starting point to drag/resize from, rather
+			// than leaving a zero-size rectangle.
 			uint32_t outputWidth, outputHeight;
 			GetWHIPSimulcastMainResolution(outputWidth, outputHeight);
 
-			roiLeft = outputWidth * 30 / 100;
-			roiTop = outputHeight * 23 / 100;
-			roiRight = outputWidth * 66 / 100;
-			roiBottom = outputHeight * 97 / 100;
+			roiLeft = outputWidth * 25 / 100;
+			roiTop = outputHeight * 10 / 100;
+			roiRight = outputWidth * 75 / 100;
+			roiBottom = outputHeight * 90 / 100;
 		}
 
 		ui->manualRoiGroupBox->setChecked(obs_data_get_bool(settings, "roi_enabled"));
