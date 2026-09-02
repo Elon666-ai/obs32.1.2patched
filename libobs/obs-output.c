@@ -32,6 +32,12 @@
 #define RECONNECT_RETRY_MAX_MSEC (15 * 60 * 1000)
 #define RECONNECT_RETRY_BASE_EXP 1.5f
 
+/* Floor for the retry interval when rescheduling after obs_output_actual_start()
+ * failed outright (see reconnect_thread()). The interval can legitimately be 0
+ * on the first attempt - obs_output_set_reconnect_delay() lets an output ask for
+ * an immediate retry - but retrying a failing start on a 0ms timer would spin. */
+#define RECONNECT_RETRY_MIN_MSEC 1000
+
 static inline bool active(const struct obs_output *output)
 {
 	return os_atomic_load_bool(&output->active);
@@ -2954,15 +2960,64 @@ void obs_output_end_data_capture(obs_output_t *output)
 static void *reconnect_thread(void *param)
 {
 	struct obs_output *output = param;
+	bool gave_up = false;
 
 	output->reconnect_thread_active = true;
 
-	if (os_event_timedwait(output->reconnect_stop_event, output->reconnect_retry_cur_msec) == ETIMEDOUT)
-		obs_output_actual_start(output);
+	/* Keep retrying for as long as the start itself fails. A failed
+	 * obs_output_actual_start() used to be discarded silently, which left
+	 * the output stuck in the "reconnecting" state forever: nothing
+	 * rescheduled another attempt, and nothing cleared the flag, so the
+	 * output stayed neither active nor recoverable until the user manually
+	 * stopped and restarted it. A start can fail for transient reasons
+	 * that a later attempt would get past - most notably losing the race
+	 * against the previous session's end_data_capture_thread, since
+	 * obs_output_can_begin_data_capture() rejects a start while the old
+	 * capture is still winding down (active is still set). On success the
+	 * reconnecting flag is cleared for us by obs_output_begin_data_capture().
+	 */
+	while (os_event_timedwait(output->reconnect_stop_event, output->reconnect_retry_cur_msec) == ETIMEDOUT) {
+		if (obs_output_actual_start(output))
+			break;
 
+		if (output->reconnect_retries >= output->reconnect_retry_max) {
+			blog(LOG_WARNING, "Output '%s': Reconnect attempts exhausted after failing to start",
+			     output->context.name);
+			/* Same teardown order as the exhausted-retries path in
+			 * output_reconnect(): the flag has to be cleared before
+			 * the "stop" signal goes out, or handlers observe an
+			 * output that is stopped and still "reconnecting". */
+			output->stop_code = OBS_OUTPUT_DISCONNECTED;
+			os_atomic_set_bool(&output->reconnecting, false);
+			if (delay_active(output))
+				os_atomic_set_bool(&output->delay_active, false);
+			obs_output_end_data_capture(output);
+			gave_up = true;
+			break;
+		}
+
+		output->reconnect_retry_cur_msec =
+			(uint32_t)(output->reconnect_retry_cur_msec * output->reconnect_retry_exp);
+		if (output->reconnect_retry_cur_msec < RECONNECT_RETRY_MIN_MSEC)
+			output->reconnect_retry_cur_msec = RECONNECT_RETRY_MIN_MSEC;
+		if (output->reconnect_retry_cur_msec > RECONNECT_RETRY_MAX_MSEC)
+			output->reconnect_retry_cur_msec = RECONNECT_RETRY_MAX_MSEC;
+
+		output->reconnect_retries++;
+
+		blog(LOG_INFO, "Output '%s': Failed to start, retrying in %.02f seconds..", output->context.name,
+		     (float)(output->reconnect_retry_cur_msec / 1000.0));
+
+		signal_reconnect(output);
+	}
+
+	/* If the stop event was signalled, obs_output_actual_stop() is blocked
+	 * in pthread_join() waiting for us, so the handle must stay joinable;
+	 * otherwise nobody will ever join it and it has to be detached. The
+	 * give-up path above already cleared the reconnecting flag. */
 	if (os_event_try(output->reconnect_stop_event) == EAGAIN)
 		pthread_detach(output->reconnect_thread);
-	else
+	else if (!gave_up)
 		os_atomic_set_bool(&output->reconnecting, false);
 
 	output->reconnect_thread_active = false;

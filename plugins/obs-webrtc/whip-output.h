@@ -60,6 +60,8 @@ private:
 	bool ShouldFallback(const std::string &backup_url);
 	void StartDisconnectGraceTimer(uint64_t generation);
 	void CancelDisconnectGraceTimer();
+	void StartWatchdog(uint64_t generation);
+	void StopWatchdog();
 	void ApplyRoi();
 
 	obs_output_t *output;
@@ -144,6 +146,17 @@ private:
 	std::mutex disconnect_grace_mutex;
 	std::condition_variable disconnect_grace_cv;
 	bool disconnect_grace_cancel = false;
+
+	// Periodic liveness check; see StartWatchdog() in whip-output.cpp.
+	// Catches a session that is nominally "running" but has stopped
+	// actually pushing bytes, which no PeerConnection state change
+	// would report on its own.
+	std::thread watchdog_thread;
+	std::mutex watchdog_mutex;
+	std::condition_variable watchdog_cv;
+	bool watchdog_cancel = false;
+	int watchdog_interval_sec = 10;
+	int watchdog_stall_sec = 30;
 };
 
 void register_whip_output();
