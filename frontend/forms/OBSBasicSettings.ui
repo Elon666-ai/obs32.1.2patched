@@ -8837,7 +8837,7 @@
                     </item>
                     <item row="2" column="0">
                      <widget class="QLabel" name="labelWhipDisconnectGraceSec">
-                      <property name="text"><string>WHIP ICE Recovery Wait</string></property>
+                      <property name="text"><string>Basic.Settings.Output.WhipDisconnectGraceSec</string></property>
                       <property name="buddy"><cstring>whipDisconnectGraceSec</cstring></property>
                      </widget>
                     </item>
@@ -8850,7 +8850,7 @@
                     </item>
                     <item row="3" column="0">
                      <widget class="QLabel" name="labelWhipReconnectBackoffSec">
-                      <property name="text"><string>WHIP Reconnect Backoff</string></property>
+                      <property name="text"><string>Basic.Settings.Output.WhipReconnectBackoffSec</string></property>
                       <property name="buddy"><cstring>whipReconnectBackoffSec</cstring></property>
                      </widget>
                     </item>
