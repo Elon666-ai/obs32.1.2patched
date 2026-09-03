@@ -72,6 +72,18 @@ private:
 	std::atomic<uint64_t> active_generation;
 
 	std::atomic<bool> running;
+
+	// Separate from `running`: `running` means "a session has begun and
+	// StopThread() owes libobs a stop signal", and must only ever be
+	// cleared by StopThread() itself (see the comment there) or nothing
+	// will tell libobs/the frontend the output actually stopped, wedging
+	// obs_output_active() true forever. `sending_enabled` instead means
+	// "Data()/Send() may still hand packets to libdatachannel" - cleared
+	// as soon as the PeerConnection reports Closed (which can happen
+	// asynchronously, independent of our own teardown) so encoder
+	// threads can't call send() while libdatachannel is tearing the
+	// transport down underneath them.
+	std::atomic<bool> sending_enabled{false};
 	std::atomic<bool> teardown_in_progress{false};
 
 	std::mutex start_stop_mutex;

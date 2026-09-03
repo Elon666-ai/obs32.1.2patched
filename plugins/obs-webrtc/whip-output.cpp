@@ -328,7 +328,7 @@ void WHIPOutput::Data(struct encoder_packet *packet)
 	// worker thread inside datachannel.dll. Root-caused an OBS
 	// crash/hang after ~11h of overnight streaming.
 	std::shared_lock<std::shared_mutex> lk(tracks_mutex);
-	if (!running.load() || teardown_in_progress.load())
+	if (!sending_enabled.load() || teardown_in_progress.load())
 		return;
 	std::shared_ptr<rtc::Track> local_audio_track = audio_track;
 	std::shared_ptr<rtc::Track> local_video_track = video_track;
@@ -660,9 +660,23 @@ bool WHIPOutput::Setup(uint64_t generation)
 			// them immediately so encoder threads cannot enter send() during
 			// that teardown window. Explicit StopThread() handles its own
 			// close under teardown_in_progress.
+			//
+			// Deliberately clears sending_enabled here, NOT running: running
+			// tells StopThread() whether it still owes libobs a stop signal
+			// (see the comment on StopThread() below), and clearing it from
+			// this callback - which can fire asynchronously, independent of
+			// our own StopThread() - raced StopThread() checking it, so the
+			// stop signal was silently skipped and obs_output_active()
+			// stayed wedged true forever. That in turn made every future
+			// CheckSchedule() poll see "should be streaming and already is"
+			// and do nothing, permanently, with no further log output -
+			// root-caused a stream that never resumed after a scheduled
+			// stop/start boundary (23:00 stop landed here, so the 00:00
+			// scheduled start next to it saw a phantom "already active"
+			// output and never actually started one).
 			if (teardown_in_progress.load())
 				break;
-			running = false;
+			sending_enabled = false;
 			{
 				std::unique_lock<std::shared_mutex> lk(tracks_mutex);
 				audio_track = nullptr;
@@ -993,6 +1007,7 @@ void WHIPOutput::StartThread(uint64_t generation)
 	if (!Connect(generation, attemptResourceURL)) {
 		MarkDisconnected();
 		{
+			sending_enabled = false;
 			teardown_in_progress = true;
 			std::unique_lock<std::shared_mutex> lk(tracks_mutex);
 			peer_connection->close();
@@ -1011,6 +1026,7 @@ void WHIPOutput::StartThread(uint64_t generation)
 		do_log(LOG_WARNING, "[WHIP generation=%llu] stale attempt became connected; deleting only its own resource",
 		       static_cast<unsigned long long>(generation));
 		{
+			sending_enabled = false;
 			teardown_in_progress = true;
 			std::unique_lock<std::shared_mutex> lk(tracks_mutex);
 			if (peer_connection)
@@ -1029,6 +1045,7 @@ void WHIPOutput::StartThread(uint64_t generation)
 
 	obs_output_begin_data_capture(output, 0);
 	running = true;
+	sending_enabled = true;
 
 	// Started only after data capture begins: before this point a flat
 	// byte counter is normal, and the connect path has its own timeouts.
@@ -1101,6 +1118,7 @@ void WHIPOutput::StopThread(bool signal, uint64_t generation, std::string resour
 		       static_cast<unsigned long long>(generation), signal ? "user_or_ui" : "internal_or_reconnect",
 		       resourceURL.c_str());
 	}
+	sending_enabled = false;
 	if (peer_connection != nullptr) {
 		teardown_in_progress = true;
 		std::unique_lock<std::shared_mutex> lk(tracks_mutex);
