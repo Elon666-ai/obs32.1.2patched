@@ -149,7 +149,7 @@ private:
 	std::atomic<int64_t> fail_since_ns{0};
 	std::atomic<bool> fail_since_set{false};
 	std::atomic<int> reconnect_attempt{0};
-	int disconnect_grace_sec = 10;
+	int disconnect_grace_sec = 5;
 	int reconnect_backoff_sec = 3;
 
 	// Grace period before a PeerConnection "Disconnected" state is

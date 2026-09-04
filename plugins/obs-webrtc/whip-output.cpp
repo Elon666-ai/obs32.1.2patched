@@ -466,9 +466,6 @@ void WHIPOutput::ConfigureVideoTrack(std::string media_stream_id, std::string cn
 	if (!encoder)
 		return;
 
-	OBSDataAutoRelease settings = obs_encoder_get_settings(encoder);
-	auto video_bitrate = (int)obs_data_get_int(settings, "bitrate");
-
 	const char *codec = obs_encoder_get_codec(encoder);
 	if (strcmp("h264", codec) == 0) {
 		video_description.addH264Codec(video_payload_type);
@@ -493,9 +490,40 @@ void WHIPOutput::ConfigureVideoTrack(std::string media_stream_id, std::string cn
 	packetizer->addToChain(new_video_sr_reporter);
 	packetizer->addToChain(std::make_shared<rtc::RtcpNackResponder>(video_nack_buffer_size));
 
-	if (video_bitrate != 0) {
-		packetizer->addToChain(std::make_shared<rtc::PacingHandler>(static_cast<double>(video_bitrate * 10000),
-									    std::chrono::milliseconds(5)));
+	// Pace the whole video track against the sum of every simulcast
+	// layer's configured bitrate, not just layer 0's: all layers share
+	// this one track (and therefore this one PacingHandler), so sizing
+	// the budget from layer 0 alone would starve the others.
+	//
+	// The bitrate is in kbps, so the conversion to the bits/s
+	// PacingHandler wants is * 1000 - it used to be * 10000, which
+	// inflated a 3000 kbps layer into a 30 Mbit/s budget against ~4.8
+	// Mbit/s of actual traffic. A ceiling that far above the real rate
+	// never throttles anything, so packets left in whatever bursts the
+	// encoder produced them in rather than being smoothed out, which is
+	// exactly what pacing exists to avoid on a congested uplink.
+	//
+	// Headroom is deliberate: pacing is meant to smooth bursts, not to
+	// enforce a rate limit. Sizing the budget too close to the nominal
+	// bitrate would delay packets whenever the encoder legitimately
+	// overshoots (keyframes, scene changes), adding latency instead of
+	// removing burstiness.
+	int64_t total_bitrate_kbps = 0;
+	for (uint32_t idx = 0; idx < MAX_OUTPUT_VIDEO_ENCODERS; idx++) {
+		const obs_encoder_t *layer = obs_output_get_video_encoder2(output, idx);
+		if (!layer)
+			break;
+
+		OBSDataAutoRelease layer_settings = obs_encoder_get_settings(layer);
+		total_bitrate_kbps += obs_data_get_int(layer_settings, "bitrate");
+	}
+
+	if (total_bitrate_kbps > 0) {
+		const double pacing_bits_per_sec = static_cast<double>(total_bitrate_kbps) * 1000.0 * 1.5;
+		do_log(LOG_INFO, "Pacing video track at %.1f Mbit/s (%lld kbps across all layers + 50%% headroom)",
+		       pacing_bits_per_sec / 1000000.0, (long long)total_bitrate_kbps);
+		packetizer->addToChain(
+			std::make_shared<rtc::PacingHandler>(pacing_bits_per_sec, std::chrono::milliseconds(5)));
 	}
 
 	auto new_video_track = peer_connection->addTrack(video_description);
@@ -517,7 +545,7 @@ bool WHIPOutput::Init()
 	disconnect_grace_sec = (int)obs_data_get_int(output_settings, "whip_disconnect_grace_sec");
 	reconnect_backoff_sec = (int)obs_data_get_int(output_settings, "whip_reconnect_backoff_sec");
 	if (!obs_data_has_user_value(output_settings, "whip_disconnect_grace_sec"))
-		disconnect_grace_sec = 10;
+		disconnect_grace_sec = 5;
 	if (!obs_data_has_user_value(output_settings, "whip_reconnect_backoff_sec"))
 		reconnect_backoff_sec = 3;
 	if (disconnect_grace_sec < 0)
@@ -685,6 +713,26 @@ bool WHIPOutput::Setup(uint64_t generation)
 				audio_sr_reporter = nullptr;
 				video_sr_reporter = nullptr;
 			}
+
+			// Closed is terminal in libdatachannel: unlike Disconnected,
+			// a closed PeerConnection can never transition back to
+			// Connected, so there is nothing left for the grace timer to
+			// wait for. In practice libdatachannel reports Closed within
+			// a millisecond of Disconnected whenever ICE gives up for
+			// real, which meant every single teardown sat through the
+			// full grace period (10s at the time) on a connection that
+			// was already dead - 14 out of 14 disconnects over one night
+			// went Disconnected -> Closed in under 1ms, then waited the
+			// whole grace period anyway before reconnecting. Cancel the
+			// timer and reconnect immediately instead; the grace period
+			// still applies to a bare Disconnected that has not (yet)
+			// been followed by Closed, which is the transient blip case
+			// it exists for.
+			CancelDisconnectGraceTimer();
+			MarkDisconnected();
+			PrepareReconnect();
+			Stop(false);
+			obs_output_signal_stop(output, OBS_OUTPUT_DISCONNECTED);
 			break;
 		}
 	});
