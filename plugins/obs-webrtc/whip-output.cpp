@@ -1244,9 +1244,8 @@ void WHIPOutput::PrepareReconnect()
 	// cleared the output's "active" flag; Start() then failed on
 	// obs_output_can_begin_data_capture() and the output was left stuck
 	// in the reconnecting state (streaming at 0 bitrate) until manually
-	// restarted. reconnect_thread() in libobs now reschedules a failed
-	// start as well, but there is no reason to schedule a doomed attempt
-	// in the first place.
+	// restarted. Scheduling a doomed attempt is worth avoiding on its own
+	// merits, independent of how libobs handles the resulting failure.
 	const int attempt = reconnect_attempt.fetch_add(1) + 1;
 	const int delay_sec = reconnect_backoff_sec * attempt;
 	obs_output_set_reconnect_delay(output, delay_sec * 1000);
