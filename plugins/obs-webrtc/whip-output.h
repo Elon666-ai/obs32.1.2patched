@@ -13,6 +13,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <future>
 #include <mutex>
 #include <shared_mutex>
 #include <thread>
@@ -62,6 +63,7 @@ private:
 	void CancelDisconnectGraceTimer();
 	void StartWatchdog(uint64_t generation);
 	void StopWatchdog();
+	void ClosePeerConnectionWithTimeout(std::shared_ptr<rtc::PeerConnection> pc);
 	void ApplyRoi();
 
 	obs_output_t *output;
@@ -170,6 +172,10 @@ private:
 	bool watchdog_cancel = false;
 	int watchdog_interval_sec = 10;
 	int watchdog_stall_sec = 30;
+
+	// How long to wait for rtc::PeerConnection::close() before giving up
+	// on it; see ClosePeerConnectionWithTimeout().
+	int close_timeout_sec = 5;
 };
 
 void register_whip_output();
