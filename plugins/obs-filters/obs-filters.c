@@ -29,6 +29,7 @@ extern struct obs_source_info chroma_key_filter_v2;
 extern struct obs_source_info async_delay_filter;
 extern struct obs_source_info temporal_denoise_filter;
 extern struct obs_source_info beauty_filter;
+extern struct obs_source_info face_swap_filter;
 #if defined(HAS_NOISEREDUCTION)
 extern struct obs_source_info noise_suppress_filter;
 extern struct obs_source_info noise_suppress_filter_v2;
@@ -66,6 +67,7 @@ bool obs_module_load(void)
 	obs_register_source(&async_delay_filter);
 	obs_register_source(&temporal_denoise_filter);
 	obs_register_source(&beauty_filter);
+	obs_register_source(&face_swap_filter);
 #if defined(HAS_NOISEREDUCTION)
 	obs_register_source(&noise_suppress_filter);
 	obs_register_source(&noise_suppress_filter_v2);
