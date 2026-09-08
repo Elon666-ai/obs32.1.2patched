@@ -412,19 +412,7 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 	HookWidget(ui->authUsername,         EDIT_CHANGED,   STREAM1_CHANGED);
 	HookWidget(ui->authPw,               EDIT_CHANGED,   STREAM1_CHANGED);
 	HookWidget(ui->ignoreRecommended,    CHECK_CHANGED,  STREAM1_CHANGED);
-	HookWidget(ui->temporalDenoiseEnable, CHECK_CHANGED, STREAM1_CHANGED);
-	HookWidget(ui->detectRoiEnable,      CHECK_CHANGED,  STREAM1_CHANGED);
-	HookWidget(ui->qualityScoreEnable,   CHECK_CHANGED,  STREAM1_CHANGED);
-	HookWidget(ui->beautyFilterEnable,   CHECK_CHANGED,  STREAM1_CHANGED);
-	HookWidget(ui->clarityFilterEnable,  CHECK_CHANGED,  STREAM1_CHANGED);
 	HookWidget(ui->whipSimulcastTotalLayers, SCROLL_CHANGED, STREAM1_CHANGED);
-	HookWidget(ui->manualRoiGroupBox,    GROUP_CHANGED,  STREAM1_CHANGED);
-	HookWidget(ui->roiLeft,              SCROLL_CHANGED, STREAM1_CHANGED);
-	HookWidget(ui->roiTop,               SCROLL_CHANGED, STREAM1_CHANGED);
-	HookWidget(ui->roiRight,             SCROLL_CHANGED, STREAM1_CHANGED);
-	HookWidget(ui->roiBottom,            SCROLL_CHANGED, STREAM1_CHANGED);
-	HookWidget(ui->roiPriority,          SCROLL_CHANGED, STREAM1_CHANGED);
-	HookWidget(ui->roiBgPriority,        SCROLL_CHANGED, STREAM1_CHANGED);
 	HookWidget(ui->enableMultitrackVideo,      CHECK_CHANGED,  STREAM1_CHANGED);
 	HookWidget(ui->multitrackVideoMaximumAggregateBitrateAuto, CHECK_CHANGED,  STREAM1_CHANGED);
 	HookWidget(ui->multitrackVideoMaximumAggregateBitrate,     SCROLL_CHANGED, STREAM1_CHANGED);
@@ -554,6 +542,18 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 	HookWidget(ui->fpsInteger,           SCROLL_CHANGED, VIDEO_CHANGED);
 	HookWidget(ui->fpsNumerator,         SCROLL_CHANGED, VIDEO_CHANGED);
 	HookWidget(ui->fpsDenominator,       SCROLL_CHANGED, VIDEO_CHANGED);
+	HookWidget(ui->temporalDenoiseEnable, CHECK_CHANGED, VIDEO_CHANGED);
+	HookWidget(ui->detectRoiEnable,      CHECK_CHANGED,  VIDEO_CHANGED);
+	HookWidget(ui->qualityScoreEnable,   CHECK_CHANGED,  VIDEO_CHANGED);
+	HookWidget(ui->beautyFilterEnable,   CHECK_CHANGED,  VIDEO_CHANGED);
+	HookWidget(ui->clarityFilterEnable,  CHECK_CHANGED,  VIDEO_CHANGED);
+	HookWidget(ui->manualRoiGroupBox,    GROUP_CHANGED,  VIDEO_CHANGED);
+	HookWidget(ui->roiLeft,              SCROLL_CHANGED, VIDEO_CHANGED);
+	HookWidget(ui->roiTop,               SCROLL_CHANGED, VIDEO_CHANGED);
+	HookWidget(ui->roiRight,             SCROLL_CHANGED, VIDEO_CHANGED);
+	HookWidget(ui->roiBottom,            SCROLL_CHANGED, VIDEO_CHANGED);
+	HookWidget(ui->roiPriority,          SCROLL_CHANGED, VIDEO_CHANGED);
+	HookWidget(ui->roiBgPriority,        SCROLL_CHANGED, VIDEO_CHANGED);
 	HookWidget(ui->colorsGroupBox,       GROUP_CHANGED,  A11Y_CHANGED);
 	HookWidget(ui->colorPreset,          COMBO_CHANGED,  A11Y_CHANGED);
 	HookWidget(ui->renderer,             COMBO_CHANGED,  ADV_RESTART);
@@ -1741,6 +1741,51 @@ void OBSBasicSettings::LoadVideoSettings()
 	LoadResolutionLists();
 	LoadFPSData();
 	LoadDownscaleFilters();
+
+	ui->temporalDenoiseEnable->setChecked(config_get_bool(main->Config(), "Video", "TemporalDenoise"));
+	ui->detectRoiEnable->setChecked(config_get_bool(main->Config(), "Video", "DetectRoi"));
+	ui->qualityScoreEnable->setChecked(config_get_bool(main->Config(), "Video", "QualityScore"));
+	ui->beautyFilterEnable->setChecked(config_get_bool(main->Config(), "Video", "BeautyFilter"));
+	ui->clarityFilterEnable->setChecked(config_get_bool(main->Config(), "Video", "ClarityFilter"));
+
+	// Manual ROI is independent of which service/protocol is selected on
+	// the Stream page (see WHIPOutput::ApplyRoi(), which is the only
+	// consumer, but reads it off the output rather than any service).
+	int64_t roiLeft = config_get_int(main->Config(), "Video", "RoiLeft");
+	int64_t roiTop = config_get_int(main->Config(), "Video", "RoiTop");
+	int64_t roiRight = config_get_int(main->Config(), "Video", "RoiRight");
+	int64_t roiBottom = config_get_int(main->Config(), "Video", "RoiBottom");
+
+	if (roiRight <= roiLeft || roiBottom <= roiTop) {
+		// No valid rectangle saved yet - prefill a generic centered box
+		// as a starting point to drag/resize from, rather than leaving
+		// a zero-size rectangle.
+		uint32_t outputWidth, outputHeight;
+		GetWHIPSimulcastMainResolution(outputWidth, outputHeight);
+
+		roiLeft = outputWidth * 25 / 100;
+		roiTop = outputHeight * 10 / 100;
+		roiRight = outputWidth * 75 / 100;
+		roiBottom = outputHeight * 90 / 100;
+	}
+
+	ui->manualRoiGroupBox->setChecked(config_get_bool(main->Config(), "Video", "RoiEnabled"));
+	ui->roiLeft->setValue((int)roiLeft);
+	ui->roiTop->setValue((int)roiTop);
+	ui->roiRight->setValue((int)roiRight);
+	ui->roiBottom->setValue((int)roiBottom);
+
+	// roi_priority/roi_bg_priority are libobs encoder-ROI priority values
+	// (-1..1, see obs-encoder.h), which x264/NVENC convert to a
+	// per-macroblock QP offset via qp_offset = -51 * priority (AV1 uses a
+	// wider 0-255 QP range and scales by 128 instead, but 51 is the right
+	// constant for the H.264/HEVC encoders this app actually targets).
+	// Stored directly as the unsigned QP magnitude shown in each spin box
+	// (defaults declared in OBSBasic::InitBasicConfigDefaults(), matching
+	// WHIPOutput::ApplyRoi()'s +6/-8 QP fallback) - sign is implied by
+	// which field it is, not part of the stored/displayed number.
+	ui->roiPriority->setValue((int)config_get_int(main->Config(), "Video", "RoiPriority"));
+	ui->roiBgPriority->setValue((int)config_get_int(main->Config(), "Video", "RoiBgPriority"));
 
 	loading = false;
 }
@@ -3215,6 +3260,28 @@ void OBSBasicSettings::SaveVideoSettings()
 	SaveSpinBox(ui->fpsNumerator, "Video", "FPSNum");
 	SaveSpinBox(ui->fpsDenominator, "Video", "FPSDen");
 	SaveComboData(ui->downscaleFilter, "Video", "ScaleType");
+
+	SaveCheckBox(ui->temporalDenoiseEnable, "Video", "TemporalDenoise");
+	SaveCheckBox(ui->detectRoiEnable, "Video", "DetectRoi");
+	SaveCheckBox(ui->qualityScoreEnable, "Video", "QualityScore");
+	SaveCheckBox(ui->beautyFilterEnable, "Video", "BeautyFilter");
+	SaveCheckBox(ui->clarityFilterEnable, "Video", "ClarityFilter");
+	main->ApplyTemporalDenoiseSetting();
+	main->ApplyBeautyFilterSetting();
+	main->ApplyClarityFilterSetting();
+
+	// Manual ROI rectangle - see WHIPOutput::ApplyRoi(), which gives this
+	// precedence over the ball/person detector above whenever it's
+	// enabled. Independent of which service/protocol is selected.
+	if (WidgetChanged(ui->manualRoiGroupBox))
+		config_set_bool(main->Config(), "Video", "RoiEnabled", ui->manualRoiGroupBox->isChecked());
+	SaveSpinBox(ui->roiLeft, "Video", "RoiLeft");
+	SaveSpinBox(ui->roiTop, "Video", "RoiTop");
+	SaveSpinBox(ui->roiRight, "Video", "RoiRight");
+	SaveSpinBox(ui->roiBottom, "Video", "RoiBottom");
+	SaveSpinBox(ui->roiPriority, "Video", "RoiPriority");
+	SaveSpinBox(ui->roiBgPriority, "Video", "RoiBgPriority");
+	main->UpdateRoiSelectButton();
 }
 
 void OBSBasicSettings::SaveAdvancedSettings()

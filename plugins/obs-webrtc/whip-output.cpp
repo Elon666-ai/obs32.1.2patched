@@ -86,48 +86,35 @@ WHIPOutput::~WHIPOutput()
 }
 
 /*
- * Applies the encoder ROI configured on the WHIP service (if any) to
- * every simulcast layer encoder. The rectangle is specified at the
- * output (mix) resolution and scaled per layer, expanded outward so
- * integer rounding never shrinks the covered region. Two regions are
- * pushed per encoder: the quality-priority rectangle first, then a
- * full-frame background region - earlier regions win where they
- * overlap (see obs_encoder_add_roi docs), so the rectangle keeps its
- * priority and everything outside it gets the (negative) background
- * priority.
+ * Applies the encoder ROI configured on the output (Settings > Video >
+ * Advanced Options / Manual ROI Region - independent of which service or
+ * protocol is selected on the Stream page) to every simulcast layer
+ * encoder. The rectangle is specified at the output (mix) resolution and
+ * scaled per layer, expanded outward so integer rounding never shrinks the
+ * covered region. Two regions are pushed per encoder: the quality-priority
+ * rectangle first, then a full-frame background region - earlier regions
+ * win where they overlap (see obs_encoder_add_roi docs), so the rectangle
+ * keeps its priority and everything outside it gets the (negative)
+ * background priority.
  */
 void WHIPOutput::ApplyRoi()
 {
-	obs_service_t *service = obs_output_get_service(output);
-	if (!service)
-		return;
+	OBSDataAutoRelease settings = obs_output_get_settings(output);
 
-	OBSDataAutoRelease settings = obs_service_get_settings(service);
-
-	// obs_context_data_init() never merges a service type's get_defaults()
-	// into the actual runtime settings object (that only happens for the
-	// scratch object obs_get_service_properties()/obs_service_defaults()
-	// build to seed a properties dialog's displayed defaults), so
-	// obs_data_get_double() below would silently return the library's
-	// built-in 0.0 fallback instead of the intended default from
-	// WHIPService::Defaults() whenever a user has never touched the
-	// Manual ROI QP fields (Settings > Stream), making every ROI region a
-	// zero-priority (i.e. no-op) no matter what the detector found.
-	// Setting the same defaults again here, directly on this settings
-	// object, makes the per-key fallback in obs_data_get_double() below
-	// actually apply. Must stay in sync with WHIPService::Defaults() and
-	// OBSBasicSettings::LoadStream1Settings()'s QP<->priority conversion
-	// (6/-8 QP, i.e. +6/-8 out of 51 priority). Same gap applies to
-	// the enable switches below, on a service that's never been through
-	// the Settings dialog.
+	// Manual ROI defaults to off; the QP defaults mirror the spin box
+	// defaults set on the Video settings page (roiPriority/roiBgPriority),
+	// applied here too so a settings object that never went through the
+	// dialog (e.g. a fresh profile) still gets sane values instead of
+	// obs_data_get_double()'s built-in 0.0 fallback, which would make
+	// every ROI region a zero-priority no-op.
 	obs_data_set_default_double(settings, "roi_priority", 6.0 / 51.0);
 	obs_data_set_default_double(settings, "roi_bg_priority", -8.0 / 51.0);
 	obs_data_set_default_bool(settings, "roi_enabled", false);
-	obs_data_set_default_bool(settings, "detect_roi", true);
+	obs_data_set_default_bool(settings, "detect_roi", false);
 
 	const bool enabled = obs_data_get_bool(settings, "roi_enabled");
 
-	// Master switch from Settings > Stream > Advanced Options. The
+	// Master switch from Settings > Video > Advanced Options. The
 	// manually-configured rectangle ("roi_enabled", debug aid) takes
 	// precedence over the detector when both are on.
 	const bool detect_roi = obs_data_get_bool(settings, "detect_roi");
@@ -247,9 +234,8 @@ bool WHIPOutput::Start()
 	ApplyRoi();
 
 	{
-		obs_service_t *service = obs_output_get_service(output);
-		OBSDataAutoRelease service_settings = service ? obs_service_get_settings(service) : nullptr;
-		if (service_settings && obs_data_get_bool(service_settings, "quality_score"))
+		OBSDataAutoRelease output_settings = obs_output_get_settings(output);
+		if (obs_data_get_bool(output_settings, "quality_score"))
 			quality_scorer.Start(output);
 	}
 

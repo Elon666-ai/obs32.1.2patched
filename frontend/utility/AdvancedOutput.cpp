@@ -697,6 +697,15 @@ bool AdvancedOutput::StartStreaming(obs_service_t *service)
 	int maxRetries = config_get_int(main->Config(), "Output", "MaxRetries");
 	int whipDisconnectGraceSec = config_get_int(main->Config(), "Output", "WhipDisconnectGraceSec");
 	int whipReconnectBackoffSec = config_get_int(main->Config(), "Output", "WhipReconnectBackoffSec");
+	bool detectRoi = config_get_bool(main->Config(), "Video", "DetectRoi");
+	bool qualityScore = config_get_bool(main->Config(), "Video", "QualityScore");
+	bool roiEnabled = config_get_bool(main->Config(), "Video", "RoiEnabled");
+	int roiLeft = config_get_int(main->Config(), "Video", "RoiLeft");
+	int roiTop = config_get_int(main->Config(), "Video", "RoiTop");
+	int roiRight = config_get_int(main->Config(), "Video", "RoiRight");
+	int roiBottom = config_get_int(main->Config(), "Video", "RoiBottom");
+	int roiPriority = config_get_int(main->Config(), "Video", "RoiPriority");
+	int roiBgPriority = config_get_int(main->Config(), "Video", "RoiBgPriority");
 	bool useDelay = config_get_bool(main->Config(), "Output", "DelayEnable");
 	int delaySec = config_get_int(main->Config(), "Output", "DelaySec");
 	bool preserveDelay = config_get_bool(main->Config(), "Output", "DelayPreserve");
@@ -735,6 +744,20 @@ bool AdvancedOutput::StartStreaming(obs_service_t *service)
 	obs_data_set_bool(settings, "dyn_bitrate", enableDynBitrate);
 	obs_data_set_int(settings, "whip_disconnect_grace_sec", whipDisconnectGraceSec);
 	obs_data_set_int(settings, "whip_reconnect_backoff_sec", whipReconnectBackoffSec);
+
+	// ROI (Settings > Video > Advanced Options / Manual ROI Region) is
+	// independent of which service/protocol is selected - only the WHIP
+	// output (WHIPOutput::ApplyRoi()) actually consumes these, but they're
+	// harmless to set on any output.
+	obs_data_set_bool(settings, "detect_roi", detectRoi);
+	obs_data_set_bool(settings, "quality_score", qualityScore);
+	obs_data_set_bool(settings, "roi_enabled", roiEnabled);
+	obs_data_set_int(settings, "roi_left", roiLeft);
+	obs_data_set_int(settings, "roi_top", roiTop);
+	obs_data_set_int(settings, "roi_right", roiRight);
+	obs_data_set_int(settings, "roi_bottom", roiBottom);
+	obs_data_set_double(settings, "roi_priority", roiPriority / 51.0);
+	obs_data_set_double(settings, "roi_bg_priority", roiBgPriority / -51.0);
 
 	auto streamOutput = StreamingOutput(); // shadowing is sort of bad, but also convenient
 

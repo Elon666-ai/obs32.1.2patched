@@ -233,63 +233,11 @@ void OBSBasicSettings::LoadStream1Settings()
 		ui->backupServer->setText(QT_UTF8(backup_server));
 		ui->backupServerLabel->setVisible(true);
 		ui->backupServer->setVisible(true);
-
-		ui->manualRoiGroupBox->show();
-
-		// obs_service_get_settings() never merges WHIPService::Defaults()
-		// into the returned object (see the matching comment in
-		// WHIPOutput::ApplyRoi()), so the intended fallbacks have to be
-		// re-registered here before reading them back too. Default +6 QP
-		// inside / -8 QP outside (see the roiPriority/roiBgPriority
-		// conversion below), Manual ROI off by default (the Ball & Person
-		// detector handles the moving-subject case instead).
-		obs_data_set_default_double(settings, "roi_priority", 6.0 / 51.0);
-		obs_data_set_default_double(settings, "roi_bg_priority", -8.0 / 51.0);
-		obs_data_set_default_bool(settings, "roi_enabled", false);
-
-		int64_t roiLeft = obs_data_get_int(settings, "roi_left");
-		int64_t roiTop = obs_data_get_int(settings, "roi_top");
-		int64_t roiRight = obs_data_get_int(settings, "roi_right");
-		int64_t roiBottom = obs_data_get_int(settings, "roi_bottom");
-
-		if (roiRight <= roiLeft || roiBottom <= roiTop) {
-			// No valid rectangle saved yet (fresh service, or the
-			// 0/0/0/0 built-in default) - prefill a generic centered
-			// box as a starting point to drag/resize from, rather
-			// than leaving a zero-size rectangle.
-			uint32_t outputWidth, outputHeight;
-			GetWHIPSimulcastMainResolution(outputWidth, outputHeight);
-
-			roiLeft = outputWidth * 25 / 100;
-			roiTop = outputHeight * 10 / 100;
-			roiRight = outputWidth * 75 / 100;
-			roiBottom = outputHeight * 90 / 100;
-		}
-
-		ui->manualRoiGroupBox->setChecked(obs_data_get_bool(settings, "roi_enabled"));
-		ui->roiLeft->setValue((int)roiLeft);
-		ui->roiTop->setValue((int)roiTop);
-		ui->roiRight->setValue((int)roiRight);
-		ui->roiBottom->setValue((int)roiBottom);
-
-		// roi_priority/roi_bg_priority are libobs encoder-ROI priority
-		// values (-1..1, see obs-encoder.h), which x264/NVENC convert to
-		// a per-macroblock QP offset via qp_offset = -51 * priority (AV1
-		// uses a wider 0-255 QP range and scales by 128 instead, but 51
-		// is the right constant for the H.264/HEVC encoders this app
-		// actually targets). roi_priority is constrained to [0,1] and
-		// roi_bg_priority to [-1,0] (see WHIPOutput::ApplyRoi()), so each
-		// spinbox shows an unsigned QP magnitude - sign is implied by
-		// which field it is, not part of the displayed number.
-		ui->roiPriority->setValue((int)std::lround(obs_data_get_double(settings, "roi_priority") * 51.0));
-		ui->roiBgPriority->setValue((int)std::lround(obs_data_get_double(settings, "roi_bg_priority") * -51.0));
 	} else {
 		ui->key->setText(key);
 		ui->whipSimulcastGroupBox->hide();
 		ui->backupServerLabel->setVisible(false);
 		ui->backupServer->setVisible(false);
-
-		ui->manualRoiGroupBox->hide();
 	}
 
 	ServiceChanged(true);
@@ -304,11 +252,6 @@ void OBSBasicSettings::LoadStream1Settings()
 	ui->streamPage->setEnabled(!streamActive);
 
 	ui->ignoreRecommended->setChecked(ignoreRecommended);
-	ui->temporalDenoiseEnable->setChecked(config_get_bool(main->Config(), "Stream1", "TemporalDenoise"));
-	ui->detectRoiEnable->setChecked(config_get_bool(main->Config(), "Stream1", "DetectRoi"));
-	ui->qualityScoreEnable->setChecked(config_get_bool(main->Config(), "Stream1", "QualityScore"));
-	ui->beautyFilterEnable->setChecked(config_get_bool(main->Config(), "Stream1", "BeautyFilter"));
-	ui->clarityFilterEnable->setChecked(config_get_bool(main->Config(), "Stream1", "ClarityFilter"));
 	ui->whipSimulcastTotalLayers->setValue(whipSimulcastTotalLayers);
 	RebuildWHIPSimulcastLayerRows();
 
@@ -392,24 +335,6 @@ void OBSBasicSettings::SaveStream1Settings()
 		obs_data_set_string(settings, "service", "WHIP");
 		obs_data_set_string(settings, "bearer_token", QT_TO_UTF8(ui->key->text()));
 		obs_data_set_string(settings, "backup_server", QT_TO_UTF8(ui->backupServer->text().trimmed()));
-		// Mirrored into the service settings so the WHIP output (and
-		// the ball/person ROI detection it drives) can read it at
-		// stream start without reaching into frontend config.
-		obs_data_set_bool(settings, "detect_roi", ui->detectRoiEnable->isChecked());
-		obs_data_set_bool(settings, "quality_score", ui->qualityScoreEnable->isChecked());
-
-		// Manually-configured ROI rectangle - see WHIPOutput::ApplyRoi(),
-		// which gives this precedence over the detector above whenever
-		// it's enabled.
-		obs_data_set_bool(settings, "roi_enabled", ui->manualRoiGroupBox->isChecked());
-		obs_data_set_int(settings, "roi_left", ui->roiLeft->value());
-		obs_data_set_int(settings, "roi_top", ui->roiTop->value());
-		obs_data_set_int(settings, "roi_right", ui->roiRight->value());
-		obs_data_set_int(settings, "roi_bottom", ui->roiBottom->value());
-
-		// Inverse of the QP -> priority conversion in LoadStream1Settings().
-		obs_data_set_double(settings, "roi_priority", ui->roiPriority->value() / 51.0);
-		obs_data_set_double(settings, "roi_bg_priority", ui->roiBgPriority->value() / -51.0);
 	} else {
 		obs_data_set_string(settings, "key", QT_TO_UTF8(ui->key->text()));
 	}
@@ -430,14 +355,6 @@ void OBSBasicSettings::SaveStream1Settings()
 	}
 
 	SaveCheckBox(ui->ignoreRecommended, "Stream1", "IgnoreRecommended");
-	SaveCheckBox(ui->temporalDenoiseEnable, "Stream1", "TemporalDenoise");
-	SaveCheckBox(ui->detectRoiEnable, "Stream1", "DetectRoi");
-	SaveCheckBox(ui->qualityScoreEnable, "Stream1", "QualityScore");
-	SaveCheckBox(ui->beautyFilterEnable, "Stream1", "BeautyFilter");
-	SaveCheckBox(ui->clarityFilterEnable, "Stream1", "ClarityFilter");
-	main->ApplyTemporalDenoiseSetting();
-	main->ApplyBeautyFilterSetting();
-	main->ApplyClarityFilterSetting();
 	main->UpdateRoiSelectButton();
 
 	auto oldWHIPSimulcastTotalLayers = config_get_int(main->Config(), "Stream1", "WHIPSimulcastTotalLayers");
@@ -981,12 +898,10 @@ void OBSBasicSettings::on_service_currentIndexChanged(int idx)
 		ui->whipSimulcastGroupBox->show();
 		ui->backupServerLabel->setVisible(true);
 		ui->backupServer->setVisible(true);
-		ui->manualRoiGroupBox->show();
 	} else {
 		ui->whipSimulcastGroupBox->hide();
 		ui->backupServerLabel->setVisible(false);
 		ui->backupServer->setVisible(false);
-		ui->manualRoiGroupBox->hide();
 	}
 }
 
