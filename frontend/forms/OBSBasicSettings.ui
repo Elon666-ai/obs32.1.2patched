@@ -2212,202 +2212,6 @@
                </widget>
                </item>
               <item>
-               <widget class="QGroupBox" name="manualRoiGroupBox">
-                <property name="title">
-                 <string>Basic.Settings.Stream.ManualRoi</string>
-                </property>
-                <property name="checkable">
-                 <bool>true</bool>
-                </property>
-                <property name="checked">
-                 <bool>false</bool>
-                </property>
-                <layout class="QVBoxLayout" name="manualRoiGroupBoxLayout">
-                 <property name="leftMargin">
-                  <number>9</number>
-                 </property>
-                 <property name="topMargin">
-                  <number>2</number>
-                 </property>
-                 <property name="rightMargin">
-                  <number>9</number>
-                 </property>
-                 <property name="bottomMargin">
-                  <number>9</number>
-                 </property>
-                 <item>
-                  <layout class="QHBoxLayout" name="manualRoiInfoLayout">
-                   <item>
-                    <spacer name="manualRoiInfoSpacer">
-                     <property name="orientation">
-                      <enum>Qt::Horizontal</enum>
-                     </property>
-                     <property name="sizeType">
-                      <enum>QSizePolicy::Fixed</enum>
-                     </property>
-                     <property name="sizeHint" stdset="0">
-                      <size>
-                       <width>170</width>
-                       <height>10</height>
-                      </size>
-                     </property>
-                    </spacer>
-                   </item>
-                   <item>
-                    <widget class="QLabel" name="manualRoiInfo">
-                     <property name="text">
-                      <string>Basic.Settings.Stream.ManualRoiInfo</string>
-                     </property>
-                     <property name="textFormat">
-                      <enum>Qt::RichText</enum>
-                     </property>
-                     <property name="wordWrap">
-                      <bool>true</bool>
-                     </property>
-                     <property name="openExternalLinks">
-                      <bool>true</bool>
-                     </property>
-                    </widget>
-                   </item>
-                  </layout>
-                 </item>
-                 <item>
-                  <layout class="QFormLayout" name="manualRoiFormLayout">
-                   <property name="fieldGrowthPolicy">
-                    <enum>QFormLayout::AllNonFixedFieldsGrow</enum>
-                   </property>
-                   <item row="0" column="0">
-                    <widget class="QLabel" name="roiLeftLabel">
-                     <property name="minimumSize">
-                      <size>
-                       <width>170</width>
-                       <height>0</height>
-                      </size>
-                     </property>
-                     <property name="text">
-                      <string>Basic.Settings.Stream.ManualRoiLeft</string>
-                     </property>
-                    </widget>
-                   </item>
-                   <item row="0" column="1">
-                    <widget class="QSpinBox" name="roiLeft">
-                     <property name="suffix">
-                      <string> px</string>
-                     </property>
-                     <property name="maximum">
-                      <number>16384</number>
-                     </property>
-                    </widget>
-                   </item>
-                   <item row="1" column="0">
-                    <widget class="QLabel" name="roiTopLabel">
-                     <property name="text">
-                      <string>Basic.Settings.Stream.ManualRoiTop</string>
-                     </property>
-                    </widget>
-                   </item>
-                   <item row="1" column="1">
-                    <widget class="QSpinBox" name="roiTop">
-                     <property name="suffix">
-                      <string> px</string>
-                     </property>
-                     <property name="maximum">
-                      <number>16384</number>
-                     </property>
-                    </widget>
-                   </item>
-                   <item row="2" column="0">
-                    <widget class="QLabel" name="roiRightLabel">
-                     <property name="text">
-                      <string>Basic.Settings.Stream.ManualRoiRight</string>
-                     </property>
-                    </widget>
-                   </item>
-                   <item row="2" column="1">
-                    <widget class="QSpinBox" name="roiRight">
-                     <property name="suffix">
-                      <string> px</string>
-                     </property>
-                     <property name="maximum">
-                      <number>16384</number>
-                     </property>
-                    </widget>
-                   </item>
-                   <item row="3" column="0">
-                    <widget class="QLabel" name="roiBottomLabel">
-                     <property name="text">
-                      <string>Basic.Settings.Stream.ManualRoiBottom</string>
-                     </property>
-                    </widget>
-                   </item>
-                   <item row="3" column="1">
-                    <widget class="QSpinBox" name="roiBottom">
-                     <property name="suffix">
-                      <string> px</string>
-                     </property>
-                     <property name="maximum">
-                      <number>16384</number>
-                     </property>
-                    </widget>
-                   </item>
-                   <item row="4" column="0">
-                    <widget class="QLabel" name="roiPriorityLabel">
-                     <property name="text">
-                      <string>Basic.Settings.Stream.ManualRoiPriority</string>
-                     </property>
-                    </widget>
-                   </item>
-                   <item row="4" column="1">
-                    <widget class="QSpinBox" name="roiPriority">
-                     <property name="toolTip">
-                      <string>Basic.Settings.Stream.ManualRoiPriority.ToolTip</string>
-                     </property>
-                     <property name="suffix">
-                      <string> QP</string>
-                     </property>
-                     <property name="minimum">
-                      <number>0</number>
-                     </property>
-                     <property name="maximum">
-                      <number>51</number>
-                     </property>
-                     <property name="value">
-                      <number>6</number>
-                     </property>
-                    </widget>
-                   </item>
-                   <item row="5" column="0">
-                    <widget class="QLabel" name="roiBgPriorityLabel">
-                     <property name="text">
-                      <string>Basic.Settings.Stream.ManualRoiBgPriority</string>
-                     </property>
-                    </widget>
-                   </item>
-                   <item row="5" column="1">
-                    <widget class="QSpinBox" name="roiBgPriority">
-                     <property name="toolTip">
-                      <string>Basic.Settings.Stream.ManualRoiBgPriority.ToolTip</string>
-                     </property>
-                     <property name="suffix">
-                      <string> QP</string>
-                     </property>
-                     <property name="minimum">
-                      <number>0</number>
-                     </property>
-                     <property name="maximum">
-                      <number>51</number>
-                     </property>
-                     <property name="value">
-                      <number>8</number>
-                     </property>
-                    </widget>
-                   </item>
-                  </layout>
-                 </item>
-                </layout>
-               </widget>
-              </item>
-              <item>
                <widget class="QGroupBox" name="scheduleGroupBox">
                 <property name="title">
                  <string>Basic.Settings.Schedule.GroupTitle</string>
@@ -2507,56 +2311,6 @@
                     <enum>Qt::RichText</enum>
                    </property>
                    <property name="openExternalLinks">
-                    <bool>true</bool>
-                   </property>
-                  </widget>
-                 </item>
-                 <item row="4" column="1">
-                  <widget class="QCheckBox" name="temporalDenoiseEnable">
-                   <property name="text">
-                    <string>Basic.Settings.Stream.TemporalDenoise</string>
-                   </property>
-                   <property name="checked">
-                    <bool>true</bool>
-                   </property>
-                  </widget>
-                 </item>
-                 <item row="5" column="1">
-                  <widget class="QCheckBox" name="detectRoiEnable">
-                   <property name="text">
-                    <string>Basic.Settings.Stream.DetectRoi</string>
-                   </property>
-                   <property name="checked">
-                    <bool>false</bool>
-                   </property>
-                  </widget>
-                 </item>
-                 <item row="6" column="1">
-                  <widget class="QCheckBox" name="qualityScoreEnable">
-                   <property name="text">
-                    <string>Basic.Settings.Stream.QualityScore</string>
-                   </property>
-                   <property name="checked">
-                    <bool>true</bool>
-                   </property>
-                  </widget>
-                 </item>
-                 <item row="7" column="1">
-                  <widget class="QCheckBox" name="beautyFilterEnable">
-                   <property name="text">
-                    <string>Basic.Settings.Stream.BeautyFilter</string>
-                   </property>
-                   <property name="checked">
-                    <bool>false</bool>
-                   </property>
-                  </widget>
-                 </item>
-                 <item row="8" column="1">
-                  <widget class="QCheckBox" name="clarityFilterEnable">
-                   <property name="text">
-                    <string>Basic.Settings.Stream.ClarityFilter</string>
-                   </property>
-                   <property name="checked">
                     <bool>true</bool>
                    </property>
                   </widget>
@@ -6719,7 +6473,43 @@
           <number>0</number>
          </property>
          <item>
-          <widget class="QGroupBox" name="videoGeneral">
+          <widget class="QScrollArea" name="videoScrollArea">
+           <property name="frameShape">
+            <enum>QFrame::NoFrame</enum>
+           </property>
+           <property name="frameShadow">
+            <enum>QFrame::Plain</enum>
+           </property>
+           <property name="lineWidth">
+            <number>0</number>
+           </property>
+           <property name="widgetResizable">
+            <bool>true</bool>
+           </property>
+           <widget class="QWidget" name="videoScrollAreaWidgetContents">
+            <property name="geometry">
+             <rect>
+              <x>0</x>
+              <y>0</y>
+              <width>755</width>
+              <height>1260</height>
+             </rect>
+            </property>
+            <layout class="QVBoxLayout" name="videoScrollAreaLayout">
+             <property name="leftMargin">
+              <number>0</number>
+             </property>
+             <property name="topMargin">
+              <number>0</number>
+             </property>
+             <property name="rightMargin">
+              <number>0</number>
+             </property>
+             <property name="bottomMargin">
+              <number>0</number>
+             </property>
+             <item>
+              <widget class="QGroupBox" name="videoGeneral">
            <property name="sizePolicy">
             <sizepolicy hsizetype="Preferred" vsizetype="Maximum">
              <horstretch>0</horstretch>
@@ -7060,20 +6850,277 @@
           </widget>
          </item>
          <item>
-          <spacer name="verticalSpacer_9">
-           <property name="orientation">
-            <enum>Qt::Vertical</enum>
+          <widget class="QGroupBox" name="videoAdvancedOptionsGroupBox">
+           <property name="title">
+            <string>Basic.Settings.Stream.AdvancedOptions</string>
            </property>
-           <property name="sizeType">
-            <enum>QSizePolicy::Expanding</enum>
+           <layout class="QFormLayout" name="videoAdvancedOptionsLayout">
+            <property name="fieldGrowthPolicy">
+             <enum>QFormLayout::AllNonFixedFieldsGrow</enum>
+            </property>
+            <property name="labelAlignment">
+             <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+            </property>
+            <property name="leftMargin">
+             <number>9</number>
+            </property>
+            <property name="topMargin">
+             <number>2</number>
+            </property>
+            <property name="rightMargin">
+             <number>9</number>
+            </property>
+            <property name="bottomMargin">
+             <number>9</number>
+            </property>
+            <item row="0" column="1">
+             <widget class="QCheckBox" name="temporalDenoiseEnable">
+              <property name="text">
+               <string>Basic.Settings.Stream.TemporalDenoise</string>
+              </property>
+              <property name="checked">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item row="1" column="1">
+             <widget class="QCheckBox" name="detectRoiEnable">
+              <property name="text">
+               <string>Basic.Settings.Stream.DetectRoi</string>
+              </property>
+              <property name="checked">
+               <bool>false</bool>
+              </property>
+             </widget>
+            </item>
+            <item row="2" column="1">
+             <widget class="QCheckBox" name="qualityScoreEnable">
+              <property name="text">
+               <string>Basic.Settings.Stream.QualityScore</string>
+              </property>
+              <property name="checked">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item row="3" column="1">
+             <widget class="QCheckBox" name="beautyFilterEnable">
+              <property name="text">
+               <string>Basic.Settings.Stream.BeautyFilter</string>
+              </property>
+              <property name="checked">
+               <bool>false</bool>
+              </property>
+             </widget>
+            </item>
+            <item row="4" column="1">
+             <widget class="QCheckBox" name="clarityFilterEnable">
+              <property name="text">
+               <string>Basic.Settings.Stream.ClarityFilter</string>
+              </property>
+              <property name="checked">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+         <item>
+          <widget class="QGroupBox" name="manualRoiGroupBox">
+           <property name="title">
+            <string>Basic.Settings.Stream.ManualRoi</string>
            </property>
-           <property name="sizeHint" stdset="0">
-            <size>
-             <width>20</width>
-             <height>0</height>
-            </size>
+           <property name="checkable">
+            <bool>true</bool>
            </property>
-          </spacer>
+           <property name="checked">
+            <bool>false</bool>
+           </property>
+           <layout class="QVBoxLayout" name="manualRoiGroupBoxLayout">
+            <property name="leftMargin">
+             <number>9</number>
+            </property>
+            <property name="topMargin">
+             <number>2</number>
+            </property>
+            <property name="rightMargin">
+             <number>9</number>
+            </property>
+            <property name="bottomMargin">
+             <number>9</number>
+            </property>
+            <item>
+             <layout class="QHBoxLayout" name="manualRoiInfoLayout">
+              <item>
+               <spacer name="manualRoiInfoSpacer">
+                <property name="orientation">
+                 <enum>Qt::Horizontal</enum>
+                </property>
+                <property name="sizeType">
+                 <enum>QSizePolicy::Fixed</enum>
+                </property>
+                <property name="sizeHint" stdset="0">
+                 <size>
+                  <width>170</width>
+                  <height>10</height>
+                 </size>
+                </property>
+               </spacer>
+              </item>
+              <item>
+               <widget class="QLabel" name="manualRoiInfo">
+                <property name="text">
+                 <string>Basic.Settings.Stream.ManualRoiInfo</string>
+                </property>
+                <property name="textFormat">
+                 <enum>Qt::RichText</enum>
+                </property>
+                <property name="wordWrap">
+                 <bool>true</bool>
+                </property>
+                <property name="openExternalLinks">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </item>
+            <item>
+             <layout class="QFormLayout" name="manualRoiFormLayout">
+              <property name="fieldGrowthPolicy">
+               <enum>QFormLayout::AllNonFixedFieldsGrow</enum>
+              </property>
+              <item row="0" column="0">
+               <widget class="QLabel" name="roiLeftLabel">
+                <property name="minimumSize">
+                 <size>
+                  <width>170</width>
+                  <height>0</height>
+                 </size>
+                </property>
+                <property name="text">
+                 <string>Basic.Settings.Stream.ManualRoiLeft</string>
+                </property>
+               </widget>
+              </item>
+              <item row="0" column="1">
+               <widget class="QSpinBox" name="roiLeft">
+                <property name="suffix">
+                 <string> px</string>
+                </property>
+                <property name="maximum">
+                 <number>16384</number>
+                </property>
+               </widget>
+              </item>
+              <item row="1" column="0">
+               <widget class="QLabel" name="roiTopLabel">
+                <property name="text">
+                 <string>Basic.Settings.Stream.ManualRoiTop</string>
+                </property>
+               </widget>
+              </item>
+              <item row="1" column="1">
+               <widget class="QSpinBox" name="roiTop">
+                <property name="suffix">
+                 <string> px</string>
+                </property>
+                <property name="maximum">
+                 <number>16384</number>
+                </property>
+               </widget>
+              </item>
+              <item row="2" column="0">
+               <widget class="QLabel" name="roiRightLabel">
+                <property name="text">
+                 <string>Basic.Settings.Stream.ManualRoiRight</string>
+                </property>
+               </widget>
+              </item>
+              <item row="2" column="1">
+               <widget class="QSpinBox" name="roiRight">
+                <property name="suffix">
+                 <string> px</string>
+                </property>
+                <property name="maximum">
+                 <number>16384</number>
+                </property>
+               </widget>
+              </item>
+              <item row="3" column="0">
+               <widget class="QLabel" name="roiBottomLabel">
+                <property name="text">
+                 <string>Basic.Settings.Stream.ManualRoiBottom</string>
+                </property>
+               </widget>
+              </item>
+              <item row="3" column="1">
+               <widget class="QSpinBox" name="roiBottom">
+                <property name="suffix">
+                 <string> px</string>
+                </property>
+                <property name="maximum">
+                 <number>16384</number>
+                </property>
+               </widget>
+              </item>
+              <item row="4" column="0">
+               <widget class="QLabel" name="roiPriorityLabel">
+                <property name="text">
+                 <string>Basic.Settings.Stream.ManualRoiPriority</string>
+                </property>
+               </widget>
+              </item>
+              <item row="4" column="1">
+               <widget class="QSpinBox" name="roiPriority">
+                <property name="toolTip">
+                 <string>Basic.Settings.Stream.ManualRoiPriority.ToolTip</string>
+                </property>
+                <property name="suffix">
+                 <string> QP</string>
+                </property>
+                <property name="minimum">
+                 <number>0</number>
+                </property>
+                <property name="maximum">
+                 <number>51</number>
+                </property>
+                <property name="value">
+                 <number>6</number>
+                </property>
+               </widget>
+              </item>
+              <item row="5" column="0">
+               <widget class="QLabel" name="roiBgPriorityLabel">
+                <property name="text">
+                 <string>Basic.Settings.Stream.ManualRoiBgPriority</string>
+                </property>
+               </widget>
+              </item>
+              <item row="5" column="1">
+               <widget class="QSpinBox" name="roiBgPriority">
+                <property name="toolTip">
+                 <string>Basic.Settings.Stream.ManualRoiBgPriority.ToolTip</string>
+                </property>
+                <property name="suffix">
+                 <string> QP</string>
+                </property>
+                <property name="minimum">
+                 <number>0</number>
+                </property>
+                <property name="maximum">
+                 <number>51</number>
+                </property>
+                <property name="value">
+                 <number>8</number>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </item>
+           </layout>
+          </widget>
          </item>
          <item>
           <widget class="QLabel" name="videoMsg">
@@ -7094,9 +7141,29 @@
            </property>
           </widget>
          </item>
+         <item>
+          <spacer name="verticalSpacer_9">
+           <property name="orientation">
+            <enum>Qt::Vertical</enum>
+           </property>
+           <property name="sizeType">
+            <enum>QSizePolicy::Expanding</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>20</width>
+             <height>0</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
         </layout>
        </widget>
-       <widget class="QWidget" name="hotkeyPage">
+      </widget>
+     </item>
+    </layout>
+   </widget>
+   <widget class="QWidget" name="hotkeyPage">
         <layout class="QVBoxLayout" name="verticalLayout_25">
          <property name="leftMargin">
           <number>9</number>

@@ -742,17 +742,18 @@ void OBSBasic::UpdatePreviewControls()
 
 void OBSBasic::UpdateRoiSelectButton()
 {
-	obs_service_t *svc = GetService();
-	const bool isWhip = svc && strcmp(obs_service_get_type(svc), "whip_custom") == 0;
+	// Manual ROI (Settings > Video > Advanced Options) is independent of
+	// which service/protocol is selected, so the button is always shown -
+	// only whether a stream is currently active gates it, same as before.
 	const bool streaming = outputHandler && outputHandler->StreamingActive();
 
-	ui->previewRoiSelectButton->setVisible(isWhip);
-	ui->previewRoiSelectButton->setEnabled(isWhip && !streaming);
+	ui->previewRoiSelectButton->setVisible(true);
+	ui->previewRoiSelectButton->setEnabled(!streaming);
 
 	// Disarm rather than leave a dangling armed tool if the button that
-	// armed it just got hidden/disabled out from under the user (service
-	// switched away from WHIP, or a stream just started).
-	if ((!isWhip || streaming) && ui->preview->RoiSelectMode())
+	// armed it just got disabled out from under the user (a stream just
+	// started).
+	if (streaming && ui->preview->RoiSelectMode())
 		ui->preview->SetRoiSelectMode(false);
 
 	// Passive preview overlay showing the currently-saved region (see
@@ -760,16 +761,11 @@ void OBSBasic::UpdateRoiSelectButton()
 	// state (unlike the button above) since it's just a "here's what's
 	// configured" indicator, still useful to check mid-stream if the
 	// camera framing shifted.
-	bool roiEnabled = false;
-	int roiLeft = 0, roiTop = 0, roiRight = 0, roiBottom = 0;
-	if (isWhip) {
-		OBSDataAutoRelease settings = obs_service_get_settings(svc);
-		roiEnabled = obs_data_get_bool(settings, "roi_enabled");
-		roiLeft = (int)obs_data_get_int(settings, "roi_left");
-		roiTop = (int)obs_data_get_int(settings, "roi_top");
-		roiRight = (int)obs_data_get_int(settings, "roi_right");
-		roiBottom = (int)obs_data_get_int(settings, "roi_bottom");
-	}
+	bool roiEnabled = config_get_bool(Config(), "Video", "RoiEnabled");
+	int roiLeft = config_get_int(Config(), "Video", "RoiLeft");
+	int roiTop = config_get_int(Config(), "Video", "RoiTop");
+	int roiRight = config_get_int(Config(), "Video", "RoiRight");
+	int roiBottom = config_get_int(Config(), "Video", "RoiBottom");
 
 	obs_video_info ovi;
 	const bool haveVideo = obs_get_video_info(&ovi) && ovi.base_width && ovi.base_height;
@@ -790,10 +786,6 @@ void OBSBasic::UpdateRoiSelectButton()
 
 void OBSBasic::OnRoiRegionSelected(float left, float top, float right, float bottom)
 {
-	obs_service_t *svc = GetService();
-	if (!svc || strcmp(obs_service_get_type(svc), "whip_custom") != 0)
-		return;
-
 	obs_video_info ovi;
 	if (!obs_get_video_info(&ovi) || !ovi.base_width || !ovi.base_height)
 		return;
@@ -819,14 +811,12 @@ void OBSBasic::OnRoiRegionSelected(float left, float top, float right, float bot
 	if (roiRight - roiLeft < 8 || roiBottom - roiTop < 8)
 		return;
 
-	OBSDataAutoRelease settings = obs_service_get_settings(svc);
-	obs_data_set_bool(settings, "roi_enabled", true);
-	obs_data_set_int(settings, "roi_left", roiLeft);
-	obs_data_set_int(settings, "roi_top", roiTop);
-	obs_data_set_int(settings, "roi_right", roiRight);
-	obs_data_set_int(settings, "roi_bottom", roiBottom);
-
-	SaveService();
+	config_set_bool(Config(), "Video", "RoiEnabled", true);
+	config_set_int(Config(), "Video", "RoiLeft", roiLeft);
+	config_set_int(Config(), "Video", "RoiTop", roiTop);
+	config_set_int(Config(), "Video", "RoiRight", roiRight);
+	config_set_int(Config(), "Video", "RoiBottom", roiBottom);
+	config_save_safe(Config(), "tmp", nullptr);
 
 	// Refreshes the passive overlay to the rect just saved above, instead
 	// of leaving it showing whatever was there before this drag.

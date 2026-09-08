@@ -130,11 +130,11 @@ private:
 	std::map<obs_encoder_t *, std::shared_ptr<videoLayerState>> videoLayerStates;
 
 	// Motion-driven dynamic ROI (balls + people); started/stopped from
-	// ApplyRoi() based on the service's "detect_roi" setting.
+	// ApplyRoi() based on the output's "detect_roi" setting.
 	MotionRoiDetector motion_roi;
 
 	// Full-reference quality score (program feed = 100) for the top
-	// layer; started from Start() based on the service's "quality_score"
+	// layer; started from Start() based on the output's "quality_score"
 	// setting, fed from Data().
 	QualityScorer quality_scorer;
 

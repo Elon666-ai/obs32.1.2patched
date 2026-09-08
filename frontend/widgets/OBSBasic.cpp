@@ -426,7 +426,7 @@ OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new 
 	connect(ui->previewZoomInButton, &QPushButton::clicked, ui->preview, &OBSBasicPreview::increaseScalingLevel);
 	connect(ui->previewZoomOutButton, &QPushButton::clicked, ui->preview, &OBSBasicPreview::decreaseScalingLevel);
 
-	/* Manual ROI select tool (WHIP only - see UpdateRoiSelectButton()) */
+	/* Manual ROI select tool (see UpdateRoiSelectButton()) */
 	connect(ui->previewRoiSelectButton, &QPushButton::toggled, ui->preview, &OBSBasicPreview::SetRoiSelectMode);
 	connect(ui->preview, &OBSBasicPreview::roiSelectModeChanged, ui->previewRoiSelectButton,
 		&QPushButton::setChecked);
@@ -673,6 +673,23 @@ bool OBSBasic::InitBasicConfigDefaults()
 	}
 
 	/* ----------------------------------------------------- */
+	/* move Advanced Options checkboxes from the Stream page */
+	/* to the Video page ("Stream1" -> "Video")              */
+	auto MigrateStreamToVideoBool = [&](const char *key) {
+		if (config_has_user_value(activeConfiguration, "Stream1", key) &&
+		    !config_has_user_value(activeConfiguration, "Video", key)) {
+			config_set_bool(activeConfiguration, "Video", key,
+					config_get_bool(activeConfiguration, "Stream1", key));
+			changed = true;
+		}
+	};
+	MigrateStreamToVideoBool("TemporalDenoise");
+	MigrateStreamToVideoBool("DetectRoi");
+	MigrateStreamToVideoBool("QualityScore");
+	MigrateStreamToVideoBool("BeautyFilter");
+	MigrateStreamToVideoBool("ClarityFilter");
+
+	/* ----------------------------------------------------- */
 	/* enforce minimum retry delay of 1 second prior to 27.1 */
 	if (config_has_user_value(activeConfiguration, "Output", "RetryDelay")) {
 		int retryDelay = config_get_uint(activeConfiguration, "Output", "RetryDelay");
@@ -736,11 +753,17 @@ bool OBSBasic::InitBasicConfigDefaults()
 	config_set_default_string(activeConfiguration, "Output", "Mode", "Simple");
 
 	config_set_default_bool(activeConfiguration, "Stream1", "IgnoreRecommended", false);
-	config_set_default_bool(activeConfiguration, "Stream1", "TemporalDenoise", true);
-	config_set_default_bool(activeConfiguration, "Stream1", "BeautyFilter", false);
-	config_set_default_bool(activeConfiguration, "Stream1", "ClarityFilter", true);
-	config_set_default_bool(activeConfiguration, "Stream1", "DetectRoi", false);
-	config_set_default_bool(activeConfiguration, "Stream1", "QualityScore", true);
+	config_set_default_bool(activeConfiguration, "Video", "TemporalDenoise", true);
+	config_set_default_bool(activeConfiguration, "Video", "BeautyFilter", false);
+	config_set_default_bool(activeConfiguration, "Video", "ClarityFilter", true);
+	config_set_default_bool(activeConfiguration, "Video", "DetectRoi", false);
+	config_set_default_bool(activeConfiguration, "Video", "QualityScore", true);
+	// Default +6 QP inside / -8 QP outside the manual ROI rectangle (see
+	// WHIPOutput::ApplyRoi()'s matching fallback). Each is stored as the
+	// unsigned QP magnitude shown in the settings spin box - sign is
+	// implied by which field it is.
+	config_set_default_int(activeConfiguration, "Video", "RoiPriority", 6);
+	config_set_default_int(activeConfiguration, "Video", "RoiBgPriority", 8);
 	config_set_default_bool(activeConfiguration, "Stream1", "EnableMultitrackVideo", false);
 	config_set_default_bool(activeConfiguration, "Stream1", "MultitrackVideoMaximumAggregateBitrateAuto", true);
 	config_set_default_bool(activeConfiguration, "Stream1", "MultitrackVideoMaximumVideoTracksAuto", true);
@@ -1430,7 +1453,7 @@ static const char *TEMPORAL_DENOISE_AUTO_NAME = "Temporal Denoise (Auto)";
 
 void OBSBasic::ApplyTemporalDenoiseSetting()
 {
-	bool enabled = config_get_bool(activeConfiguration, "Stream1", "TemporalDenoise");
+	bool enabled = config_get_bool(activeConfiguration, "Video", "TemporalDenoise");
 
 	auto cb = [](void *param, obs_source_t *source) -> bool {
 		const bool enable = *static_cast<bool *>(param);
@@ -1465,7 +1488,7 @@ static const char *BEAUTY_FILTER_AUTO_NAME = "Face Beauty (Auto)";
 
 void OBSBasic::ApplyBeautyFilterSetting()
 {
-	bool enabled = config_get_bool(activeConfiguration, "Stream1", "BeautyFilter");
+	bool enabled = config_get_bool(activeConfiguration, "Video", "BeautyFilter");
 
 	auto cb = [](void *param, obs_source_t *source) -> bool {
 		const bool enable = *static_cast<bool *>(param);
@@ -1504,7 +1527,7 @@ static const char *CLARITY_FILTER_AUTO_NAME = "Clarity (Auto)";
 
 void OBSBasic::ApplyClarityFilterSetting()
 {
-	bool enabled = config_get_bool(activeConfiguration, "Stream1", "ClarityFilter");
+	bool enabled = config_get_bool(activeConfiguration, "Video", "ClarityFilter");
 
 	auto cb = [](void *param, obs_source_t *source) -> bool {
 		const bool enable = *static_cast<bool *>(param);

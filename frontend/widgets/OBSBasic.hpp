@@ -1423,15 +1423,15 @@ signals:
 	 * -------------------------------------
 	 */
 public:
-	// Enforces the Settings > Stream > Advanced Options "Temporal
-	// Denoise" checkbox ("Stream1"/"TemporalDenoise"): attaches the
+	// Enforces the Settings > Video > Advanced Options "Temporal
+	// Denoise" checkbox ("Video"/"TemporalDenoise"): attaches the
 	// temporal_denoise_filter to every camera (dshow_input) source when
 	// enabled, removes the auto-added instance when disabled. Runs on
-	// startup, on stream-settings save, and at stream start.
+	// startup, on video-settings save, and at stream start.
 	void ApplyTemporalDenoiseSetting();
 
 	// Same enforcement pattern for the "Face Beauty" checkbox
-	// ("Stream1"/"BeautyFilter"): attaches beauty_filter to every
+	// ("Video"/"BeautyFilter"): attaches beauty_filter to every
 	// camera (dshow_input) source only - media-file/network playback
 	// sources are excluded and never receive the filter. The filter
 	// itself only acts on frames where it detects a face, so attaching
@@ -1439,16 +1439,16 @@ public:
 	void ApplyBeautyFilterSetting();
 
 	// Same enforcement pattern for the "Clarity" checkbox
-	// ("Stream1"/"ClarityFilter"): attaches clarity_filter (GPU local
+	// ("Video"/"ClarityFilter"): attaches clarity_filter (GPU local
 	// contrast enhancement) to every camera (dshow_input) source.
 	void ApplyClarityFilterSetting();
 
-	// Shows/enables ui->previewRoiSelectButton only while the active
-	// service is WHIP and no stream is active (manual ROI is WHIP-only,
-	// and the settings page it also lives on is disabled while
-	// streaming - see LoadStream1Settings()). Runs on startup, at
-	// stream start/stop, and on stream-settings save, same as the Apply*
-	// functions above.
+	// Shows/enables ui->previewRoiSelectButton while no stream is active.
+	// Manual ROI (Settings > Video > Advanced Options) is independent of
+	// which service/protocol is selected - only the WHIP output actually
+	// applies it (WHIPOutput::ApplyRoi()), but the button/tool itself is
+	// always available. Runs on startup, at stream start/stop, and on
+	// video-settings save, same as the Apply* functions above.
 	void UpdateRoiSelectButton();
 
 	/* -------------------------------------

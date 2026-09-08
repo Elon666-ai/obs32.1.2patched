@@ -19,6 +19,8 @@
 
 #include "OBSBasic.hpp"
 
+#include <cmath>
+
 constexpr std::string_view OBSServiceFileName = "service.json";
 
 void OBSBasic::SaveService()
@@ -85,6 +87,40 @@ bool OBSBasic::LoadService()
 		const char *encoder_codec = obs_get_encoder_codec(option);
 		if (!encoder_codec || strcmp(encoder_codec, "opus") != 0)
 			config_set_string(activeConfiguration, "AdvOut", "AudioEncoder", "ffmpeg_opus");
+	}
+
+	// One-time migration: Manual ROI used to live on the WHIP service's
+	// settings; it's now a global "Video" config setting independent of
+	// which service/protocol is selected (see WHIPOutput::ApplyRoi() and
+	// OBSBasicSettings::LoadVideoSettings()). Only migrate off a WHIP
+	// service (the only place these keys were ever written), and only if
+	// nothing has been saved under the new keys yet.
+	if (strcmp(obs_service_get_type(service), "whip_custom") == 0 &&
+	    !config_has_user_value(activeConfiguration, "Video", "RoiEnabled")) {
+		OBSDataAutoRelease serviceSettings = obs_service_get_settings(service);
+		if (obs_data_has_user_value(serviceSettings, "roi_left") ||
+		    obs_data_has_user_value(serviceSettings, "roi_enabled")) {
+			config_set_bool(activeConfiguration, "Video", "RoiEnabled",
+					obs_data_get_bool(serviceSettings, "roi_enabled"));
+			config_set_int(activeConfiguration, "Video", "RoiLeft",
+				       obs_data_get_int(serviceSettings, "roi_left"));
+			config_set_int(activeConfiguration, "Video", "RoiTop",
+				       obs_data_get_int(serviceSettings, "roi_top"));
+			config_set_int(activeConfiguration, "Video", "RoiRight",
+				       obs_data_get_int(serviceSettings, "roi_right"));
+			config_set_int(activeConfiguration, "Video", "RoiBottom",
+				       obs_data_get_int(serviceSettings, "roi_bottom"));
+			if (obs_data_has_user_value(serviceSettings, "roi_priority"))
+				config_set_int(activeConfiguration, "Video", "RoiPriority",
+					       (int)std::lround(obs_data_get_double(serviceSettings, "roi_priority") *
+								 51.0));
+			if (obs_data_has_user_value(serviceSettings, "roi_bg_priority"))
+				config_set_int(
+					activeConfiguration, "Video", "RoiBgPriority",
+					(int)std::lround(obs_data_get_double(serviceSettings, "roi_bg_priority") *
+							  -51.0));
+			activeConfiguration.SaveSafe("tmp");
+		}
 	}
 
 	return true;
