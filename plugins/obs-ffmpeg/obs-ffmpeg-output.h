@@ -20,6 +20,9 @@ struct ffmpeg_cfg {
 	int audio_bitrate;
 	const char *video_encoder;
 	int video_encoder_id;
+	const char *video_encoders[MAX_OUTPUT_VIDEO_ENCODERS];
+	int video_bitrates[MAX_OUTPUT_VIDEO_ENCODERS];
+	int video_gop_sizes[MAX_OUTPUT_VIDEO_ENCODERS];
 	const char *audio_encoder;
 	int audio_encoder_id;
 	int audio_bitrates[MAX_AUDIO_MIXES]; // multi-track
@@ -53,9 +56,18 @@ struct ffmpeg_audio_info {
 	AVCodecContext *ctx;
 };
 
+struct ffmpeg_video_info {
+	AVStream *stream;
+	AVCodecContext *ctx;
+};
+
 struct ffmpeg_data {
+	/* Used by the generic FFmpeg output. */
 	AVStream *video;
 	AVCodecContext *video_ctx;
+	/* Used by the native MPEG-TS output. */
+	struct ffmpeg_video_info video_infos[MAX_OUTPUT_VIDEO_ENCODERS];
+	bool video_started[MAX_OUTPUT_VIDEO_ENCODERS];
 	struct ffmpeg_audio_info *audio_infos;
 	const AVCodec *acodec;
 	const AVCodec *vcodec;

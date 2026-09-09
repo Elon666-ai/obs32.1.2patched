@@ -56,6 +56,21 @@ inline bool OBSBasicSettings::IsWHIP() const
 	return ui->service->currentData().toInt() == (int)ListOpt::WHIP;
 }
 
+bool OBSBasicSettings::IsWHIPSimulcast() const
+{
+	return IsWHIP() || (IsCustomService() && protocol.compare("SRT", Qt::CaseInsensitive) == 0);
+}
+
+void OBSBasicSettings::UpdateWHIPSimulcastControls()
+{
+	const bool simulcast = IsWHIPSimulcast();
+	ui->whipSimulcastGroupBox->setVisible(simulcast);
+	ui->whipSimulcastGroupBox->setEnabled(simulcast);
+	ui->whipSimulcastTotalLayers->setMaximum(IsCustomService() && protocol.compare("SRT", Qt::CaseInsensitive) == 0
+							? 4
+							: 5);
+}
+
 void OBSBasicSettings::InitStreamPage()
 {
 	ui->connectAccount2->setVisible(false);
@@ -229,16 +244,15 @@ void OBSBasicSettings::LoadStream1Settings()
 
 	if (is_whip) {
 		ui->key->setText(bearer_token);
-		ui->whipSimulcastGroupBox->show();
 		ui->backupServer->setText(QT_UTF8(backup_server));
 		ui->backupServerLabel->setVisible(true);
 		ui->backupServer->setVisible(true);
 	} else {
 		ui->key->setText(key);
-		ui->whipSimulcastGroupBox->hide();
 		ui->backupServerLabel->setVisible(false);
 		ui->backupServer->setVisible(false);
 	}
+	UpdateWHIPSimulcastControls();
 
 	ServiceChanged(true);
 
@@ -895,14 +909,13 @@ void OBSBasicSettings::on_service_currentIndexChanged(int idx)
 	}
 
 	if (IsWHIP()) {
-		ui->whipSimulcastGroupBox->show();
 		ui->backupServerLabel->setVisible(true);
 		ui->backupServer->setVisible(true);
 	} else {
-		ui->whipSimulcastGroupBox->hide();
 		ui->backupServerLabel->setVisible(false);
 		ui->backupServer->setVisible(false);
 	}
+	UpdateWHIPSimulcastControls();
 }
 
 void OBSBasicSettings::on_customServer_textChanged(const QString &)
@@ -917,6 +930,7 @@ void OBSBasicSettings::on_customServer_textChanged(const QString &)
 		lastCustomServer = ui->customServer->text();
 
 	SwapMultiTrack(QT_TO_UTF8(protocol));
+	UpdateWHIPSimulcastControls();
 }
 
 void OBSBasicSettings::ServiceChanged(bool resetFields)
