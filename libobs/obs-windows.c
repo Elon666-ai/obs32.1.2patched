@@ -15,6 +15,12 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 ******************************************************************************/
 
+/* Must come before any header that might pull in <windows.h> (which
+ * defaults to the legacy Winsock 1.1 header) - GetBestInterface()/
+ * GetAdaptersAddresses() below need Winsock2. */
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
 #include "util/windows/win-registry.h"
 #include "util/windows/win-version.h"
 #include "util/platform.h"
@@ -25,6 +31,8 @@
 #include <windows.h>
 #include <wscapi.h>
 #include <iwscapi.h>
+#include <iphlpapi.h>
+#include <wlanapi.h>
 
 static uint32_t win_ver = 0;
 static uint32_t win_build = 0;
@@ -139,6 +147,155 @@ static void log_lenovo_vantage(void)
 static void log_conflicting_software(void)
 {
 	log_lenovo_vantage();
+}
+
+static const char *adapter_type_str(IFTYPE if_type)
+{
+	switch (if_type) {
+	case IF_TYPE_ETHERNET_CSMACD:
+		return "Ethernet";
+	case IF_TYPE_IEEE80211:
+		return "Wi-Fi";
+	case IF_TYPE_WWANPP:
+	case IF_TYPE_WWANPP2:
+		return "Cellular";
+	case IF_TYPE_PPP:
+		return "PPP";
+	case IF_TYPE_TUNNEL:
+		return "Tunnel/VPN";
+	default:
+		return "Other";
+	}
+}
+
+/* Best-effort: log the SSID and negotiated link rate of the Wi-Fi adapter
+ * carrying the default route. Windows exposes this only through a separate
+ * WLAN service handle, not via GetAdaptersAddresses(). "Wi-Fi" here can mean
+ * either a home/office router or a phone's mobile hotspot - the OS makes no
+ * distinction, hence logging the SSID as a hint for the reader instead of
+ * guessing. */
+static void log_wifi_details(const char *adapter_name)
+{
+	HANDLE client = NULL;
+	DWORD negotiated_version;
+	WLAN_INTERFACE_INFO_LIST *if_list = NULL;
+	WLAN_CONNECTION_ATTRIBUTES *attrs = NULL;
+
+	if (WlanOpenHandle(2, NULL, &negotiated_version, &client) != ERROR_SUCCESS)
+		return;
+
+	if (WlanEnumInterfaces(client, NULL, &if_list) != ERROR_SUCCESS || !if_list)
+		goto cleanup_handle;
+
+	/* Match by GUID string rather than array index - WLAN_INTERFACE_INFO_LIST
+	 * and IP_ADAPTER_ADDRESSES are two independent enumerations, with no
+	 * guarantee they'd return devices in the same order. */
+	for (DWORD i = 0; i < if_list->dwNumberOfItems; i++) {
+		WCHAR guid_str[64] = {0};
+		if (StringFromGUID2(&if_list->InterfaceInfo[i].InterfaceGuid, guid_str,
+				     sizeof(guid_str) / sizeof(guid_str[0])) == 0)
+			continue;
+
+		char *guid_str_utf8 = NULL;
+		os_wcs_to_utf8_ptr(guid_str, 0, &guid_str_utf8);
+		bool matches = guid_str_utf8 && strcmp(guid_str_utf8, adapter_name) == 0;
+		bfree(guid_str_utf8);
+		if (!matches)
+			continue;
+
+		DWORD attrs_size = 0;
+		if (WlanQueryInterface(client, &if_list->InterfaceInfo[i].InterfaceGuid,
+					wlan_intf_opcode_current_connection, NULL, &attrs_size, (PVOID *)&attrs,
+					NULL) != ERROR_SUCCESS ||
+		    !attrs)
+			goto cleanup_iflist;
+
+		break;
+	}
+
+	if (attrs && attrs->isState == wlan_interface_state_connected) {
+		const DOT11_SSID *ssid = &attrs->wlanAssociationAttributes.dot11Ssid;
+		char ssid_str[33] = {0};
+		DWORD ssid_len = ssid->uSSIDLength;
+		if (ssid_len > sizeof(ssid_str) - 1)
+			ssid_len = sizeof(ssid_str) - 1;
+		memcpy(ssid_str, ssid->ucSSID, ssid_len);
+
+		blog(LOG_INFO, "\tSSID: \"%s\", link rate: %lu/%lu Mbps (rx/tx)", ssid_str,
+		     attrs->wlanAssociationAttributes.ulRxRate / 1000,
+		     attrs->wlanAssociationAttributes.ulTxRate / 1000);
+	}
+
+	if (attrs)
+		WlanFreeMemory(attrs);
+
+cleanup_iflist:
+	WlanFreeMemory(if_list);
+
+cleanup_handle:
+	WlanCloseHandle(client, NULL);
+}
+
+/* Identifies the adapter carrying the default route (i.e. the one actually
+ * used to reach the internet, not just any adapter with a link) and logs its
+ * type. This can't tell a home/office Wi-Fi router apart from a phone's
+ * mobile hotspot - both look identical to Windows as a Wi-Fi connection -
+ * but the SSID logged by log_wifi_details() gives a human a hint either way.
+ * Purely diagnostic: helps explain publish-side packet loss patterns after
+ * the fact (e.g. a WHIP stream degrading with FU-A reassembly errors on the
+ * receiving end) without needing to ask the streamer what network they're on. */
+static void log_network_adapter(void)
+{
+	DWORD best_if_index = 0;
+	/* Destination doesn't need to be reachable - GetBestInterface only
+	 * consults the routing table to find which local interface a route
+	 * to it would use. 8.8.8.8 is used purely as a stand-in for "the
+	 * internet" so the loopback/link-local routes are skipped. */
+	IPAddr internet_dest;
+	InetPtonA(AF_INET, "8.8.8.8", &internet_dest);
+
+	if (GetBestInterface(internet_dest, &best_if_index) != NO_ERROR || best_if_index == 0) {
+		blog(LOG_INFO, "Network: could not determine default route interface");
+		return;
+	}
+
+	ULONG out_buf_len = 16384;
+	IP_ADAPTER_ADDRESSES *adapters = bmalloc(out_buf_len);
+	ULONG flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+	ULONG ret = GetAdaptersAddresses(AF_UNSPEC, flags, NULL, adapters, &out_buf_len);
+	if (ret == ERROR_BUFFER_OVERFLOW) {
+		bfree(adapters);
+		adapters = bmalloc(out_buf_len);
+		ret = GetAdaptersAddresses(AF_UNSPEC, flags, NULL, adapters, &out_buf_len);
+	}
+
+	if (ret != NO_ERROR) {
+		bfree(adapters);
+		blog(LOG_INFO, "Network: could not enumerate adapters");
+		return;
+	}
+
+	for (IP_ADAPTER_ADDRESSES *adapter = adapters; adapter; adapter = adapter->Next) {
+		if (adapter->IfIndex != best_if_index && adapter->Ipv6IfIndex != best_if_index)
+			continue;
+
+		char *name = NULL;
+		os_wcs_to_utf8_ptr(adapter->FriendlyName, 0, &name);
+
+		double link_speed_mbps = (double)adapter->TransmitLinkSpeed / 1000000.0;
+
+		blog(LOG_INFO, "Network: %s (%s), link speed: %.0f Mbps", name ? name : "unknown",
+		     adapter_type_str(adapter->IfType), link_speed_mbps);
+
+		bfree(name);
+
+		if (adapter->IfType == IF_TYPE_IEEE80211)
+			log_wifi_details(adapter->AdapterName);
+
+		break;
+	}
+
+	bfree(adapters);
 }
 
 extern const char *get_win_release_id();
@@ -362,6 +519,7 @@ void log_system_info(void)
 	log_gaming_features();
 	log_security_products();
 	log_conflicting_software();
+	log_network_adapter();
 }
 
 struct obs_hotkeys_platform {
