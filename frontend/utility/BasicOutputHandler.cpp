@@ -237,8 +237,14 @@ BasicOutputHandler::BasicOutputHandler(OBSBasic *main_) : main(main_)
 	if (multitrack_enabled)
 		multitrackVideo = make_unique<MultitrackVideoOutput>();
 
-	if (config_get_int(main->Config(), "Stream1", "WHIPSimulcastTotalLayers") > 1)
-		whipSimulcastEncoders = make_unique<WHIPSimulcastEncoders>();
+	const char *service_protocol = obs_service_get_protocol(service);
+	const bool is_whip = service_protocol && astrcmpi(service_protocol, "WHIP") == 0;
+	const bool is_srt_custom = service_protocol && astrcmpi(service_protocol, "SRT") == 0 &&
+					   strcmp(obs_service_get_id(service), "rtmp_custom") == 0;
+	const int max_simulcast_layers = is_srt_custom ? 4 : 5;
+	const int configured_layers = config_get_int(main->Config(), "Stream1", "WHIPSimulcastTotalLayers");
+	if ((is_whip || is_srt_custom) && configured_layers > 1)
+		whipSimulcastEncoders = make_unique<WHIPSimulcastEncoders>(max_simulcast_layers);
 }
 
 extern void log_vcam_changed(const VCamConfig &config, bool starting);

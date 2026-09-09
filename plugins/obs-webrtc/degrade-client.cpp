@@ -83,8 +83,10 @@ WsDegradeClient::WsDegradeClient()
 		// abnormal close) just sits idle forever, silently losing
 		// the ability to receive further degrade/recover commands
 		// for the rest of the stream.
-		next_reconnect_attempt_ns = os_gettime_ns() + (uint64_t)reconnect_backoff_ms * 1000000ULL;
-		reconnect_backoff_ms = std::min(reconnect_backoff_ms * 2, kReconnectBackoffMaxMs);
+		if (!ws_url.empty()) {
+			next_reconnect_attempt_ns = os_gettime_ns() + (uint64_t)reconnect_backoff_ms * 1000000ULL;
+			reconnect_backoff_ms = std::min(reconnect_backoff_ms * 2, kReconnectBackoffMaxMs);
+		}
 	});
 
 	client.set_fail_handler([this](handle_t) {
@@ -100,8 +102,10 @@ WsDegradeClient::WsDegradeClient()
 		       ec_msg.empty() ? "(unknown)" : ec_msg.c_str());
 		std::lock_guard<std::mutex> lk(mtx);
 		conn.reset();
-		next_reconnect_attempt_ns = os_gettime_ns() + (uint64_t)reconnect_backoff_ms * 1000000ULL;
-		reconnect_backoff_ms = std::min(reconnect_backoff_ms * 2, kReconnectBackoffMaxMs);
+		if (!ws_url.empty()) {
+			next_reconnect_attempt_ns = os_gettime_ns() + (uint64_t)reconnect_backoff_ms * 1000000ULL;
+			reconnect_backoff_ms = std::min(reconnect_backoff_ms * 2, kReconnectBackoffMaxMs);
+		}
 	});
 
 	client.set_message_handler([this](handle_t h, client_t::message_ptr msg) {
@@ -259,6 +263,15 @@ void WsDegradeClient::UnregisterOutput()
 {
 	std::lock_guard<std::mutex> lk(mtx);
 	output = nullptr;
+	whip_url.clear();
+	ws_url.clear();
+	next_reconnect_attempt_ns = 0;
+	reconnect_backoff_ms = kReconnectBackoffMinMs;
+	if (conn) {
+		websocketpp::lib::error_code ec;
+		conn->close(websocketpp::close::status::going_away, "output-unregistered", ec);
+		conn.reset();
+	}
 	do_log(LOG_INFO, "Output unregistered");
 }
 

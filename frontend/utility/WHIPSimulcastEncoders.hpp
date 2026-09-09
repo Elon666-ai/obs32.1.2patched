@@ -17,6 +17,7 @@
 #pragma once
 
 #include <string>
+#include <algorithm>
 
 // One scaled-down Simulcast layer's target resolution/bitrate, as
 // configured by the user in Settings > Stream > Simulcast (see
@@ -98,6 +99,8 @@ static inline bool GetWHIPSimulcastLayerConfig(config_t *config, int layerNum, W
 
 struct WHIPSimulcastEncoders {
 public:
+	explicit WHIPSimulcastEncoders(int maxLayers = 5) : maxLayers(maxLayers) {}
+
 	// config is main->Config() (see AdvancedOutput.cpp/SimpleOutput.cpp
 	// call sites) - read here rather than threaded through as
 	// individual values so each layer can independently fall back to
@@ -112,6 +115,7 @@ public:
 			rescaleFilter = OBS_SCALE_BICUBIC;
 		}
 
+		whipSimulcastTotalLayers = std::min(whipSimulcastTotalLayers, maxLayers);
 		if (whipSimulcastTotalLayers <= 1) {
 			return;
 		}
@@ -285,4 +289,5 @@ public:
 private:
 	std::vector<OBSEncoder> whipSimulcastEncoders;
 	std::vector<bool> usingCustomLayer;
+	int maxLayers;
 };
