@@ -222,6 +222,22 @@ private:
 	int prevLangIndex;
 	bool prevBrowserAccel;
 
+	// ui->customServer (the server/endpoint address line edit) is the
+	// same widget for both the "Custom" (rtmp_custom - RTMP/RTMPS/SRT/
+	// RIST) and "WHIP" service entries in ui->service - see
+	// ServiceChanged()'s serverStackedWidget page 1. Without this,
+	// switching between them left whichever endpoint was typed for one
+	// showing (and about to be saved) under the other. These remember
+	// each service type's own endpoint text across switches within the
+	// same Settings session; SwapStreamDestinationField() keeps
+	// ui->customServer's displayed text in sync with whichever type is
+	// currently selected.
+	enum class StreamDestinationField { Common, Custom, WHIP };
+	StreamDestinationField lastStreamDestinationField = StreamDestinationField::Common;
+	QString customServiceEndpoint;
+	QString whipServiceEndpoint;
+	void SwapStreamDestinationField();
+
 	/* WHIP Simulcast per-layer resolution/bitrate settings (Settings >
 	 * Stream, below the "Total Layers" spinbox - see
 	 * WHIPSimulcastEncoders.hpp for how these are consumed). One row of
