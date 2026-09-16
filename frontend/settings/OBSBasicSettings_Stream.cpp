@@ -149,18 +149,48 @@ void OBSBasicSettings::LoadStream1Settings()
 	if (is_rtmp_custom || is_whip)
 		ui->customServer->setText(server);
 
-	// Seed each service type's remembered endpoint from whichever one is
-	// actually loaded from disk, so SwapStreamDestinationField() doesn't
-	// blank out the other on the first switch this session - see its
-	// declaration in the header for why these are kept separate.
+	// Seed each service type's remembered endpoint/key from whichever one
+	// is actually loaded from disk, so SwapStreamDestinationField()
+	// doesn't blank out the others on the first switch this session -
+	// see its declaration in the header for why these are kept separate.
 	if (is_rtmp_custom) {
 		customServiceEndpoint = QT_UTF8(server);
+		customServiceKey = QT_UTF8(key);
 		lastStreamDestinationField = StreamDestinationField::Custom;
 	} else if (is_whip) {
 		whipServiceEndpoint = QT_UTF8(server);
+		whipServiceKey = QT_UTF8(bearer_token);
 		lastStreamDestinationField = StreamDestinationField::WHIP;
 	} else {
+		commonServiceKey = QT_UTF8(key);
 		lastStreamDestinationField = StreamDestinationField::Common;
+	}
+
+	// service.json only ever holds *one* service type's settings - saving
+	// after a category switch overwrites it entirely (see
+	// SaveStream1Settings()), so whichever category ISN'T the one just
+	// loaded above has no on-disk copy of its own to seed from. Restore
+	// those from the persisted Stream1 config values written by
+	// SaveStream1Settings() instead, so switching to them within this
+	// session (or across dialog reopens / app restarts) starts from
+	// where they were left rather than blank - a blank value here would
+	// otherwise get saved right back into service.json the moment the
+	// user Applies after switching, permanently losing that category's
+	// endpoint/key.
+	auto load_persisted = [this](const char *key_name) {
+		const char *value = config_get_string(main->Config(), "Stream1", key_name);
+		return value ? QT_UTF8(value) : QString();
+	};
+	if (!is_rtmp_custom) {
+		customServiceEndpoint = load_persisted("CustomServiceEndpoint");
+		customServiceKey = load_persisted("CustomServiceKey");
+	}
+	if (!is_whip) {
+		whipServiceEndpoint = load_persisted("WhipServiceEndpoint");
+		whipServiceKey = load_persisted("WhipServiceKey");
+	}
+	if (is_rtmp_custom || is_whip) {
+		commonServiceKey = load_persisted("CommonServiceKey");
 	}
 
 	if (is_rtmp_custom) {
@@ -374,6 +404,32 @@ void OBSBasicSettings::SaveStream1Settings()
 
 	main->SetService(newService);
 	main->SaveService();
+
+	// service.json only ever holds the *currently selected* category's
+	// endpoint/key - saving overwrites it entirely, so the other two
+	// categories' settings would otherwise only survive in the
+	// customServiceEndpoint/whipServiceEndpoint/etc. in-memory fields,
+	// which don't outlive this dialog. Sync the just-saved category's
+	// in-memory copy with what was actually applied (ui->useAuth etc.
+	// aren't tracked in these, only endpoint/key/bearer token), then
+	// persist all three categories' remembered values to Stream1 config
+	// so LoadStream1Settings() can restore whichever ones aren't in
+	// service.json on the next load - see its matching load_persisted
+	// lambda.
+	if (customServer) {
+		customServiceEndpoint = ui->customServer->text();
+		customServiceKey = ui->key->text();
+	} else if (whip) {
+		whipServiceEndpoint = ui->customServer->text();
+		whipServiceKey = ui->key->text();
+	} else {
+		commonServiceKey = ui->key->text();
+	}
+	config_set_string(main->Config(), "Stream1", "CustomServiceEndpoint", QT_TO_UTF8(customServiceEndpoint));
+	config_set_string(main->Config(), "Stream1", "CustomServiceKey", QT_TO_UTF8(customServiceKey));
+	config_set_string(main->Config(), "Stream1", "WhipServiceEndpoint", QT_TO_UTF8(whipServiceEndpoint));
+	config_set_string(main->Config(), "Stream1", "WhipServiceKey", QT_TO_UTF8(whipServiceKey));
+	config_set_string(main->Config(), "Stream1", "CommonServiceKey", QT_TO_UTF8(commonServiceKey));
 	main->auth = auth;
 	if (!!main->auth) {
 		main->auth->LoadUI();
@@ -882,34 +938,42 @@ static void get_yt_ch_title(Ui::OBSBasicSettings *ui)
 }
 #endif
 
-// ui->customServer is shared by the "Custom" (rtmp_custom) and "WHIP"
-// service entries - see the field declarations in OBSBasicSettings.hpp for
-// why. Call this *before* ServiceChanged() runs on a service switch (and
-// before IsCustomService()/IsWHIP() below reflect the *new* selection) so
-// the outgoing type's typed endpoint is stashed under its own key, then the
-// incoming type's remembered endpoint (possibly empty, if never touched
-// this session) is put in the box instead of leaving the outgoing type's
-// text sitting there under the wrong service.
+// ui->customServer (endpoint) and ui->key (stream key / WHIP bearer token)
+// are each shared across the built-in ("Common"), "Custom" (rtmp_custom),
+// and "WHIP" service entries - see the field declarations in
+// OBSBasicSettings.hpp for why. Call this *before* ServiceChanged() runs on
+// a service switch (and before IsCustomService()/IsWHIP() below reflect the
+// *new* selection) so the outgoing category's typed endpoint/key is stashed
+// under its own keys, then the incoming category's remembered endpoint/key
+// (possibly empty, if never touched this session) is put in the boxes
+// instead of leaving the outgoing category's text sitting there under the
+// wrong service.
 void OBSBasicSettings::SwapStreamDestinationField()
 {
 	switch (lastStreamDestinationField) {
 	case StreamDestinationField::Custom:
 		customServiceEndpoint = ui->customServer->text();
+		customServiceKey = ui->key->text();
 		break;
 	case StreamDestinationField::WHIP:
 		whipServiceEndpoint = ui->customServer->text();
+		whipServiceKey = ui->key->text();
 		break;
 	case StreamDestinationField::Common:
+		commonServiceKey = ui->key->text();
 		break;
 	}
 
 	if (IsCustomService()) {
 		ui->customServer->setText(customServiceEndpoint);
+		ui->key->setText(customServiceKey);
 		lastStreamDestinationField = StreamDestinationField::Custom;
 	} else if (IsWHIP()) {
 		ui->customServer->setText(whipServiceEndpoint);
+		ui->key->setText(whipServiceKey);
 		lastStreamDestinationField = StreamDestinationField::WHIP;
 	} else {
+		ui->key->setText(commonServiceKey);
 		lastStreamDestinationField = StreamDestinationField::Common;
 	}
 }
