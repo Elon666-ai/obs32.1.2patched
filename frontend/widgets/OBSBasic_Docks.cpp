@@ -88,6 +88,8 @@ void OBSBasic::on_resetDocks_triggered(bool force)
 	controlsDock->setVisible(true);
 	statsDock->setVisible(false);
 	statsDock->setFloating(true);
+	logDock->setVisible(true);
+	logDock->setFloating(false);
 
 	QList<QDockWidget *> bottomDocks{ui->mixerDock, ui->transitionsDock, controlsDock};
 
@@ -116,6 +118,7 @@ void OBSBasic::on_lockDocks_toggled(bool lock)
 	ui->transitionsDock->setFeatures(mainFeatures);
 	controlsDock->setFeatures(mainFeatures);
 	statsDock->setFeatures(features);
+	logDock->setFeatures(features);
 
 	for (int i = extraDocks.size() - 1; i >= 0; i--)
 		extraDocks[i]->setFeatures(features);
@@ -195,7 +198,8 @@ bool OBSBasic::IsDockObjectNameUsed(const QString &name)
 	     << "mixerDock"
 	     << "transitionsDock"
 	     << "controlsDock"
-	     << "statsDock";
+	     << "statsDock"
+	     << "logDock";
 	list << extraDockNames;
 	list << extraCustomDockNames;
 

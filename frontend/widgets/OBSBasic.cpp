@@ -23,6 +23,7 @@
 #include "ColorSelect.hpp"
 #include "OBSBasicControls.hpp"
 #include "OBSBasicStats.hpp"
+#include "OBSLogPanel.hpp"
 #include "plugin-manager/PluginManager.hpp"
 
 #include <obs-module.h>
@@ -366,6 +367,15 @@ OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new 
 	statsDock->setFloating(true);
 	statsDock->resize(700, 200);
 
+	logDock = new OBSDock();
+	logDock->setObjectName(QStringLiteral("logDock"));
+	logDock->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable |
+			     QDockWidget::DockWidgetFloatable);
+	logDock->setWindowTitle("Log");
+	addDockWidget(Qt::RightDockWidgetArea, logDock);
+	logDock->setVisible(true);
+	logDock->resize(400, 300);
+
 	copyActionsDynamicProperties();
 
 	qRegisterMetaType<int64_t>("int64_t");
@@ -530,6 +540,7 @@ OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new 
 	SETUP_DOCK(ui->transitionsDock);
 	SETUP_DOCK(controlsDock);
 	SETUP_DOCK(statsDock);
+	SETUP_DOCK(logDock);
 #undef SETUP_DOCK
 
 	// Register shortcuts for Undo/Redo
@@ -1230,6 +1241,10 @@ void OBSBasic::OBSInit()
 	/* setup stats dock */
 	OBSBasicStats *statsDlg = new OBSBasicStats(statsDock, false);
 	statsDock->setWidget(statsDlg);
+
+	/* setup log dock */
+	OBSLogPanel *logPanel = new OBSLogPanel(logDock);
+	logDock->setWidget(logPanel);
 
 	/* ----------------------------- */
 	/* add custom browser docks      */
