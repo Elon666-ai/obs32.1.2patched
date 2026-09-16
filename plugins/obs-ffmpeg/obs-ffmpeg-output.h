@@ -134,6 +134,13 @@ struct ffmpeg_output {
 	pthread_mutex_t start_stop_mutex;
 	volatile bool start_stop_thread_active;
 	bool has_connected;
+
+	/* SRT packet loss monitoring: disconnect (triggering the normal
+	 * reconnect path) after 2 consecutive high-loss samples, since letting
+	 * srt/ffmpeg keep pushing packets into a badly degraded link has been
+	 * observed to eventually crash inside the ffmpeg/srt library code. */
+	uint64_t srt_loss_check_ts;
+	int srt_high_loss_count;
 #endif
 };
 
