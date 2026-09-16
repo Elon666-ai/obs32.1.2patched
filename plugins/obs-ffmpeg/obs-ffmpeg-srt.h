@@ -902,8 +902,8 @@ static int libsrt_close(URLContext *h)
 	     "\tbytes retransmitted [%.1f %%]\n"
 	     "\tbytes dropped [%.1f %%]\n",
 	     (double)perf.msTimeStamp / 1000.0, perf.mbpsSendRate, (double)perf.byteSentTotal / 1000000.0,
-	     perf.byteSentTotal ? perf.byteRetransTotal / perf.byteSentTotal * 100.0 : 0,
-	     perf.byteSentTotal ? perf.byteSndDropTotal / perf.byteSentTotal * 100.0 : 0);
+	     perf.byteSentTotal ? (double)perf.byteRetransTotal / (double)perf.byteSentTotal * 100.0 : 0.0,
+	     perf.byteSentTotal ? (double)perf.byteSndDropTotal / (double)perf.byteSentTotal * 100.0 : 0.0);
 
 	srt_epoll_release(s->eid);
 	int err = srt_close(s->fd);
