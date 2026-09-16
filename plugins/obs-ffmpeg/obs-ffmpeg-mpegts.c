@@ -671,6 +671,32 @@ static void ffmpeg_mpegts_log_callback(void *param, int level, const char *forma
 	UNUSED_PARAMETER(param);
 }
 
+static void get_srt_stats_proc(void *data, calldata_t *cd)
+{
+	struct ffmpeg_output *stream = data;
+	double packet_loss_percent = 0.0;
+	bool valid = false;
+
+	if (stream->ff_data.config.is_srt && os_atomic_load_bool(&stream->running) && stream->h &&
+	    stream->h->priv_data) {
+		SRTContext *s = (SRTContext *)stream->h->priv_data;
+		SRT_TRACEBSTATS perf = {0};
+
+		/* Do not clear on read: the same socket stats are also used for
+		 * periodic bandwidth/RTT logging and the session summary logged
+		 * on close. */
+		if (srt_bstats(s->fd, &perf, 0) == 0) {
+			int64_t attempted = perf.pktSentTotal + perf.pktSndLossTotal;
+			if (attempted > 0)
+				packet_loss_percent = (double)perf.pktSndLossTotal / (double)attempted * 100.0;
+			valid = true;
+		}
+	}
+
+	calldata_set_bool(cd, "valid", valid);
+	calldata_set_float(cd, "packet_loss_percent", packet_loss_percent);
+}
+
 static void *ffmpeg_mpegts_create(obs_data_t *settings, obs_output_t *output)
 {
 	struct ffmpeg_output *data = bzalloc(sizeof(struct ffmpeg_output));
@@ -687,6 +713,10 @@ static void *ffmpeg_mpegts_create(obs_data_t *settings, obs_output_t *output)
 		goto fail;
 
 	av_log_set_callback(ffmpeg_mpegts_log_callback);
+
+	proc_handler_t *ph = obs_output_get_proc_handler(output);
+	proc_handler_add(ph, "void get_srt_stats(out bool valid, out float packet_loss_percent)", get_srt_stats_proc,
+			 data);
 
 	UNUSED_PARAMETER(settings);
 	return data;
@@ -756,6 +786,56 @@ static uint64_t get_packet_sys_dts(struct ffmpeg_output *stream, AVPacket *packe
 	return start_ts + pause_offset + (uint64_t)av_rescale_q(packet->dts, time_base, (AVRational){1, 1000000000});
 }
 
+/* Locates the AVStream and AVCodecContext that produced the packet, matching
+ * by AVStream::index (mpegts_write_packet sets packet->stream_index from
+ * avstream->id, which is assigned as the stream's index at creation). */
+static bool find_packet_stream_info(struct ffmpeg_output *stream, int stream_index, AVStream **avstream_out,
+				    AVCodecContext **codec_ctx_out)
+{
+	struct ffmpeg_data *data = &stream->ff_data;
+
+	for (size_t i = 0; i < MAX_OUTPUT_VIDEO_ENCODERS; i++) {
+		if (data->video_infos[i].stream && data->video_infos[i].stream->index == stream_index) {
+			*avstream_out = data->video_infos[i].stream;
+			*codec_ctx_out = data->video_infos[i].ctx;
+			return true;
+		}
+	}
+
+	for (int i = 0; i < data->num_audio_streams; i++) {
+		if (data->audio_infos && data->audio_infos[i].stream &&
+		    data->audio_infos[i].stream->index == stream_index) {
+			*avstream_out = data->audio_infos[i].stream;
+			*codec_ctx_out = data->audio_infos[i].ctx;
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/* FFmpeg's MPEG-TS muxer divides by the stream/codec time base denominator
+ * (e.g. for PCR/PTS/DTS calculations) without its own validation. A zero or
+ * negative time base here - seen after certain encoder reconfigurations -
+ * crashes with an integer-division fault deep inside avformat, so validate
+ * before ever handing the packet to av_write_frame. */
+static bool packet_time_base_valid(struct ffmpeg_output *stream, AVPacket *packet)
+{
+	AVStream *avstream = NULL;
+	AVCodecContext *codec_ctx = NULL;
+
+	if (!find_packet_stream_info(stream, packet->stream_index, &avstream, &codec_ctx))
+		return false;
+
+	if (!avstream || avstream->time_base.num <= 0 || avstream->time_base.den <= 0)
+		return false;
+
+	if (!codec_ctx || codec_ctx->time_base.num <= 0 || codec_ctx->time_base.den <= 0)
+		return false;
+
+	return true;
+}
+
 static int mpegts_process_packet(struct ffmpeg_output *stream)
 {
 	AVPacket *packet = NULL;
@@ -784,6 +864,16 @@ static int mpegts_process_packet(struct ffmpeg_output *stream)
 			goto end;
 		}
 	}
+
+	if (!packet_time_base_valid(stream, packet)) {
+		ffmpeg_mpegts_log_error(LOG_ERROR, &stream->ff_data,
+					"process_packet: Dropping packet with invalid time base (stream=%d) to "
+					"avoid a division-by-zero crash in the MPEG-TS muxer",
+					packet->stream_index);
+		ret = 0;
+		goto end;
+	}
+
 	stream->total_bytes += packet->size;
 	const int stream_index = packet->stream_index;
 	const int64_t pts = packet->pts;
@@ -812,6 +902,90 @@ end:
 	return ret;
 }
 
+/* Checks the SRT packet loss rate for the most recent ~3 second interval
+ * (using srt_bstats' "clear on read" mode so it doesn't overlap with the
+ * cumulative "Total" stats used by get_srt_stats_proc / the session summary
+ * logged on close). If loss exceeds 20% on 3 consecutive checks, disconnects
+ * (triggering OBS' normal reconnect logic) instead of letting ffmpeg/srt keep
+ * pushing packets into a badly degraded link, which has been observed to
+ * eventually crash inside the ffmpeg/srt library code.
+ *
+ * The window was widened from 1s/2 consecutive to 3s/3 consecutive, and a
+ * minimum sample size was added, after false-positive disconnects observed
+ * in the field: the cumulative stat logged every 10s (get_srt_stats_proc,
+ * never cleared) stayed at a steady 4-8% for the whole session, while this
+ * clear-on-read check repeatedly reported 20-40% and disconnected a
+ * healthy stream. Both read the same underlying counters, so the
+ * discrepancy isn't measurement error - it's this window being too short:
+ * whenever actual send volume in a ~1s slice is low (encoder stalls,
+ * silence, the interleaved EINVAL-drop path below all thin out how much
+ * write_thread actually hands to srt_send in that slice), a couple of
+ * retransmitted packets are a small denominator away from crossing 20%,
+ * even though the same packets are a rounding error against 10s of
+ * traffic. Tripling the window and requiring a minimum attempted-packet
+ * count before a sample counts at all makes each sample proportionally
+ * harder to skew the same way while still catching a link that's
+ * genuinely losing >20% of sustained traffic for ~9 seconds straight. */
+#define SRT_LOSS_CHECK_INTERVAL_NS 3000000000ULL
+#define SRT_LOSS_DISCONNECT_THRESHOLD_PERCENT 20.0
+#define SRT_LOSS_DISCONNECT_CONSECUTIVE_COUNT 3
+#define SRT_LOSS_MIN_SAMPLE_PACKETS 200
+
+/* Returns true if a disconnect was signaled, in which case the caller must
+ * stop using stream->h (the write thread's normal error path already
+ * expects the output to be torn down once obs_output_signal_stop is
+ * called). */
+static bool check_srt_packet_loss(struct ffmpeg_output *stream)
+{
+	if (!stream->ff_data.config.is_srt || !stream->h || !stream->h->priv_data)
+		return false;
+
+	uint64_t now = os_gettime_ns();
+	if (stream->srt_loss_check_ts && (now - stream->srt_loss_check_ts) < SRT_LOSS_CHECK_INTERVAL_NS)
+		return false;
+	stream->srt_loss_check_ts = now;
+
+	SRTContext *s = (SRTContext *)stream->h->priv_data;
+	SRT_TRACEBSTATS perf = {0};
+
+	if (srt_bstats(s->fd, &perf, 1) != 0)
+		return false;
+
+	int64_t attempted = (int64_t)perf.pktSent + perf.pktSndLoss;
+
+	/* Too few packets attempted this window for the ratio to mean
+	 * anything (e.g. a brief encoder stall or silence made write_thread
+	 * idle for most of the window) - skip the sample rather than let a
+	 * couple of retransmits look like a saturated loss rate. Neither
+	 * incrementing nor resetting srt_high_loss_count here: an
+	 * inconclusive sample shouldn't manufacture a streak, but it
+	 * shouldn't erase a real one either. */
+	if (attempted < SRT_LOSS_MIN_SAMPLE_PACKETS)
+		return false;
+
+	double loss_percent = (double)perf.pktSndLoss / (double)attempted * 100.0;
+
+	if (loss_percent <= SRT_LOSS_DISCONNECT_THRESHOLD_PERCENT) {
+		stream->srt_high_loss_count = 0;
+		return false;
+	}
+
+	stream->srt_high_loss_count++;
+	warn("SRT packet loss %.1f%% exceeds %.0f%% threshold (%d/%d consecutive)", loss_percent,
+	     SRT_LOSS_DISCONNECT_THRESHOLD_PERCENT, stream->srt_high_loss_count,
+	     SRT_LOSS_DISCONNECT_CONSECUTIVE_COUNT);
+
+	if (stream->srt_high_loss_count < SRT_LOSS_DISCONNECT_CONSECUTIVE_COUNT)
+		return false;
+
+	warn("SRT packet loss exceeded %.0f%% for %d consecutive checks, disconnecting to reconnect and avoid "
+	     "a badly degraded link crashing the srt/ffmpeg library",
+	     SRT_LOSS_DISCONNECT_THRESHOLD_PERCENT, SRT_LOSS_DISCONNECT_CONSECUTIVE_COUNT);
+	stream->srt_high_loss_count = 0;
+	obs_output_signal_stop(stream->output, OBS_OUTPUT_DISCONNECTED);
+	return true;
+}
+
 static void ffmpeg_mpegts_stop_internal(void *data, uint64_t ts, bool signal);
 static void *write_thread(void *data)
 {
@@ -820,6 +994,9 @@ static void *write_thread(void *data)
 	while (os_sem_wait(stream->write_sem) == 0) {
 		/* check to see if shutting down */
 		if (os_event_try(stream->stop_event) == 0)
+			break;
+
+		if (check_srt_packet_loss(stream))
 			break;
 
 		int ret = mpegts_process_packet(stream);
@@ -1239,6 +1416,8 @@ static bool ffmpeg_mpegts_start(void *data)
 	stream->video_start_ts = 0;
 	stream->total_bytes = 0;
 	stream->got_headers = false;
+	stream->srt_loss_check_ts = 0;
+	stream->srt_high_loss_count = 0;
 
 	pthread_create(&stream->start_stop_thread, NULL, start_stop_thread_fn, cmd);
 	os_atomic_set_bool(&stream->start_stop_thread_active, true);
