@@ -363,6 +363,27 @@ void OBSBasicStatusBar::UpdateDroppedFrames()
 	}
 }
 
+static void LogSRTStats(obs_output_t *output)
+{
+	proc_handler_t *ph = obs_output_get_proc_handler(output);
+	if (!ph)
+		return;
+
+	calldata_t cd;
+	calldata_init(&cd);
+	if (!proc_handler_call(ph, "get_srt_stats", &cd)) {
+		calldata_free(&cd);
+		return;
+	}
+
+	if (calldata_bool(&cd, "valid")) {
+		double loss = calldata_float(&cd, "packet_loss_percent");
+		blog(LOG_INFO, "SRT packet loss: %.1f%%", loss);
+	}
+
+	calldata_free(&cd);
+}
+
 void OBSBasicStatusBar::OBSOutputReconnect(void *data, calldata_t *params)
 {
 	OBSBasicStatusBar *statusBar = static_cast<OBSBasicStatusBar *>(data);
@@ -444,6 +465,18 @@ void OBSBasicStatusBar::UpdateStatusBar()
 		UpdateRecordTime();
 
 	UpdateDroppedFrames();
+
+	/* log SRT stats every 10 seconds */
+	static int srtLogCounter = 0;
+	if (streamOutput) {
+		srtLogCounter++;
+		if (srtLogCounter >= 10) {
+			srtLogCounter = 0;
+			OBSOutput output = OBSGetStrongRef(streamOutput);
+			if (output)
+				LogSRTStats(output);
+		}
+	}
 
 	int skipped = video_output_get_skipped_frames(obs_get_video());
 	int total = video_output_get_total_frames(obs_get_video());
