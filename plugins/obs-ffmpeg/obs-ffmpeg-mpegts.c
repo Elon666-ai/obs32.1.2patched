@@ -851,6 +851,19 @@ static int mpegts_process_packet(struct ffmpeg_output *stream)
 	if (!packet)
 		return 0;
 
+	/* Never hand a packet to the muxer before avformat_write_header() has
+	 * completed. FFmpeg only initializes each stream's internal FFFrac
+	 * (FFStream.priv_pts) in init_pts(), which runs from
+	 * avformat_write_header(). Calling av_write_frame() earlier makes
+	 * compute_muxer_pkt_fields() divide by a zero priv_pts.den and raises
+	 * c0000094 (integer divide by zero). This also discards stale packets
+	 * left over from a previous (re)connect whose header wrote a different
+	 * AVFormatContext. */
+	if (!stream->ff_data.initialized) {
+		av_packet_free(&packet);
+		return 0;
+	}
+
 	//blog(LOG_DEBUG,
 	//     "size = %d, flags = %lX, stream = %d, "
 	//     "packets queued: %lu",
@@ -1499,6 +1512,11 @@ static bool h264_packet_to_annexb(AVPacket *packet)
  */
 void mpegts_write_packet(struct ffmpeg_output *stream, struct encoder_packet *encpacket)
 {
+	/* Don't queue packets until avformat_write_header() has completed: the
+	 * write thread feeds them to av_write_frame(), which divides by zero if
+	 * FFmpeg's per-stream priv_pts has not been initialized yet. */
+	if (!stream->ff_data.initialized)
+		return;
 	if (stopping(stream))
 		return;
 	bool is_video = encpacket->type == OBS_ENCODER_VIDEO;
