@@ -915,90 +915,6 @@ end:
 	return ret;
 }
 
-/* Checks the SRT packet loss rate for the most recent ~3 second interval
- * (using srt_bstats' "clear on read" mode so it doesn't overlap with the
- * cumulative "Total" stats used by get_srt_stats_proc / the session summary
- * logged on close). If loss exceeds 20% on 3 consecutive checks, disconnects
- * (triggering OBS' normal reconnect logic) instead of letting ffmpeg/srt keep
- * pushing packets into a badly degraded link, which has been observed to
- * eventually crash inside the ffmpeg/srt library code.
- *
- * The window was widened from 1s/2 consecutive to 3s/3 consecutive, and a
- * minimum sample size was added, after false-positive disconnects observed
- * in the field: the cumulative stat logged every 10s (get_srt_stats_proc,
- * never cleared) stayed at a steady 4-8% for the whole session, while this
- * clear-on-read check repeatedly reported 20-40% and disconnected a
- * healthy stream. Both read the same underlying counters, so the
- * discrepancy isn't measurement error - it's this window being too short:
- * whenever actual send volume in a ~1s slice is low (encoder stalls,
- * silence, the interleaved EINVAL-drop path below all thin out how much
- * write_thread actually hands to srt_send in that slice), a couple of
- * retransmitted packets are a small denominator away from crossing 20%,
- * even though the same packets are a rounding error against 10s of
- * traffic. Tripling the window and requiring a minimum attempted-packet
- * count before a sample counts at all makes each sample proportionally
- * harder to skew the same way while still catching a link that's
- * genuinely losing >20% of sustained traffic for ~9 seconds straight. */
-#define SRT_LOSS_CHECK_INTERVAL_NS 3000000000ULL
-#define SRT_LOSS_DISCONNECT_THRESHOLD_PERCENT 20.0
-#define SRT_LOSS_DISCONNECT_CONSECUTIVE_COUNT 3
-#define SRT_LOSS_MIN_SAMPLE_PACKETS 200
-
-/* Returns true if a disconnect was signaled, in which case the caller must
- * stop using stream->h (the write thread's normal error path already
- * expects the output to be torn down once obs_output_signal_stop is
- * called). */
-static bool check_srt_packet_loss(struct ffmpeg_output *stream)
-{
-	if (!stream->ff_data.config.is_srt || !stream->h || !stream->h->priv_data)
-		return false;
-
-	uint64_t now = os_gettime_ns();
-	if (stream->srt_loss_check_ts && (now - stream->srt_loss_check_ts) < SRT_LOSS_CHECK_INTERVAL_NS)
-		return false;
-	stream->srt_loss_check_ts = now;
-
-	SRTContext *s = (SRTContext *)stream->h->priv_data;
-	SRT_TRACEBSTATS perf = {0};
-
-	if (srt_bstats(s->fd, &perf, 1) != 0)
-		return false;
-
-	int64_t attempted = (int64_t)perf.pktSent + perf.pktSndLoss;
-
-	/* Too few packets attempted this window for the ratio to mean
-	 * anything (e.g. a brief encoder stall or silence made write_thread
-	 * idle for most of the window) - skip the sample rather than let a
-	 * couple of retransmits look like a saturated loss rate. Neither
-	 * incrementing nor resetting srt_high_loss_count here: an
-	 * inconclusive sample shouldn't manufacture a streak, but it
-	 * shouldn't erase a real one either. */
-	if (attempted < SRT_LOSS_MIN_SAMPLE_PACKETS)
-		return false;
-
-	double loss_percent = (double)perf.pktSndLoss / (double)attempted * 100.0;
-
-	if (loss_percent <= SRT_LOSS_DISCONNECT_THRESHOLD_PERCENT) {
-		stream->srt_high_loss_count = 0;
-		return false;
-	}
-
-	stream->srt_high_loss_count++;
-	warn("SRT packet loss %.1f%% exceeds %.0f%% threshold (%d/%d consecutive)", loss_percent,
-	     SRT_LOSS_DISCONNECT_THRESHOLD_PERCENT, stream->srt_high_loss_count,
-	     SRT_LOSS_DISCONNECT_CONSECUTIVE_COUNT);
-
-	if (stream->srt_high_loss_count < SRT_LOSS_DISCONNECT_CONSECUTIVE_COUNT)
-		return false;
-
-	warn("SRT packet loss exceeded %.0f%% for %d consecutive checks, disconnecting to reconnect and avoid "
-	     "a badly degraded link crashing the srt/ffmpeg library",
-	     SRT_LOSS_DISCONNECT_THRESHOLD_PERCENT, SRT_LOSS_DISCONNECT_CONSECUTIVE_COUNT);
-	stream->srt_high_loss_count = 0;
-	obs_output_signal_stop(stream->output, OBS_OUTPUT_DISCONNECTED);
-	return true;
-}
-
 static void ffmpeg_mpegts_stop_internal(void *data, uint64_t ts, bool signal);
 static void *write_thread(void *data)
 {
@@ -1007,9 +923,6 @@ static void *write_thread(void *data)
 	while (os_sem_wait(stream->write_sem) == 0) {
 		/* check to see if shutting down */
 		if (os_event_try(stream->stop_event) == 0)
-			break;
-
-		if (check_srt_packet_loss(stream))
 			break;
 
 		int ret = mpegts_process_packet(stream);
@@ -1429,8 +1342,6 @@ static bool ffmpeg_mpegts_start(void *data)
 	stream->video_start_ts = 0;
 	stream->total_bytes = 0;
 	stream->got_headers = false;
-	stream->srt_loss_check_ts = 0;
-	stream->srt_high_loss_count = 0;
 
 	pthread_create(&stream->start_stop_thread, NULL, start_stop_thread_fn, cmd);
 	os_atomic_set_bool(&stream->start_stop_thread_active, true);
