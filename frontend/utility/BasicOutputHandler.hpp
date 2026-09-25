@@ -6,13 +6,18 @@
 #include <obs.hpp>
 #include <util/dstr.hpp>
 
+#include <atomic>
 #include <future>
+#include <memory>
+#include <mutex>
+#include <vector>
 
 #define RTMP_PROTOCOL "rtmp"
 #define SRT_PROTOCOL "srt"
 #define RIST_PROTOCOL "rist"
 
 class OBSBasic;
+class DegradeClient;
 
 using SetupStreamingContinuation_t = std::function<void(bool)>;
 
@@ -68,7 +73,26 @@ struct BasicOutputHandler {
 
 	BasicOutputHandler(OBSBasic *main_);
 
-	virtual ~BasicOutputHandler() {};
+	virtual ~BasicOutputHandler();
+
+	// ----- mmx degrade executor (WHIP + SRT) ---------------------------
+	// Owns the degrade WebSocket connection and applies TARGET_STATE.
+	// Bitrate is applied live via obs_encoder_update(); a layer change
+	// restarts the stream output with the highest-resolution layers
+	// unbound (protocol §R6). Serialized by degradeMutex.
+	std::unique_ptr<DegradeClient> degradeClient;
+	std::mutex degradeMutex;
+	std::vector<OBSEncoder> degradeEncoders;
+	int degradeFullLayers = 0;
+	int degradeCurLayers = 0;
+	int degradeTargetLayers = 0;
+	int degradeCurPct = 100;
+	bool degradeActive = false;
+	// A layer change is applied by restarting the output, which must run
+	// on the Qt main thread (it emits stop/start signals the frontend,
+	// scheduled-streaming timer and UI all react to). This collapses
+	// back-to-back TARGET_STATE messages into one queued restart.
+	std::atomic<bool> degradeRestartQueued{false};
 
 	virtual std::shared_future<void> SetupStreaming(obs_service_t *service,
 							SetupStreamingContinuation_t continuation) = 0;
@@ -107,6 +131,19 @@ protected:
 						      size_t main_audio_mixer, std::optional<size_t> vod_track_mixer,
 						      std::function<void(std::optional<bool>)> continuation);
 	OBSDataAutoRelease GenerateMultitrackVideoStreamDumpConfig();
+
+	// mmx degrade executor lifecycle. StartDegrade() snapshots the bound
+	// video encoders and derives the WS URL from service (WHIP or SRT);
+	// StopDegrade() tears the connection down. Call after the stream
+	// output has started / before it is stopped.
+	void StartDegrade(obs_service_t *service, obs_output_t *output);
+	void StopDegrade();
+
+private:
+	void ApplyDegradeTarget(int layers, int bitratePercent);
+	void ApplyDegradeBitrate(int bitratePercent);
+	void PerformDegradeRestart();
+	void RebindDegradeLayers(obs_output_t *output, int layers);
 };
 
 BasicOutputHandler *CreateSimpleOutputHandler(OBSBasic *main);
