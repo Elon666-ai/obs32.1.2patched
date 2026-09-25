@@ -8,10 +8,6 @@
 
 #include <nlohmann/json.hpp>
 
-#ifdef WHIP_DEGRADE_ACTIVE
-#include "degrade-client.h"
-#endif
-
 /*
  * Sets the maximum size for a video fragment. Effective range is
  * 576-1470, with a lower value equating to more packets created,
@@ -239,20 +235,6 @@ bool WHIPOutput::Start()
 			quality_scorer.Start(output);
 	}
 
-#ifdef WHIP_DEGRADE_ACTIVE
-	// Kick off the mmx degrade-channel WS connection as early as
-	// possible (before the WHIP/RTC connection itself even starts
-	// negotiating in StartThread below), rather than waiting until
-	// after data capture has begun - the WS connection and the WHIP
-	// connection are otherwise unrelated, so there's no reason to
-	// serialize them. Simulcast layer count is decided purely by local
-	// config and is never touched by degrade-client regardless of when
-	// this is called (see the comment on TargetState in
-	// degrade-client.h); this just gets bitrate-degrade adaptation
-	// wired up sooner.
-	WsDegradeClient::Instance().RegisterOutput(output);
-#endif
-
 	start_stop_thread = std::thread(&WHIPOutput::StartThread, this, generation);
 
 	return true;
@@ -268,10 +250,6 @@ void WHIPOutput::Stop(bool signal)
 
 	motion_roi.Stop();
 	quality_scorer.Stop();
-
-#ifdef WHIP_DEGRADE_ACTIVE
-	WsDegradeClient::Instance().UnregisterOutput();
-#endif
 
 	std::lock_guard<std::mutex> l(start_stop_mutex);
 	const uint64_t generation = active_generation.load();

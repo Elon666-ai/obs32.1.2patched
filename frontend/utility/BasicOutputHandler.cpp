@@ -1,6 +1,11 @@
 #include "BasicOutputHandler.hpp"
 #include "AdvancedOutput.hpp"
+#include "DegradeClient.hpp"
 #include "SimpleOutput.hpp"
+
+#include <algorithm>
+
+#include <util/platform.h>
 
 #include <utility/MultitrackVideoError.hpp>
 #include <utility/StartMultiTrackVideoStreamingGuard.hpp>
@@ -587,6 +592,231 @@ OBSDataAutoRelease BasicOutputHandler::GenerateMultitrackVideoStreamDumpConfig()
 	}
 
 	return settings;
+}
+
+BasicOutputHandler::~BasicOutputHandler()
+{
+	StopDegrade();
+}
+
+void BasicOutputHandler::StartDegrade(obs_service_t *service, obs_output_t *output)
+{
+	StopDegrade();
+
+	if (!service || !output)
+		return;
+
+	// Multitrack video manages its own outputs/encoders; leave it alone.
+	if (multitrackVideo && multitrackVideoActive)
+		return;
+
+	const char *protocol = obs_service_get_protocol(service);
+	const bool is_whip = protocol && astrcmpi(protocol, "WHIP") == 0;
+	const bool is_srt = protocol && astrcmpi(protocol, "SRT") == 0;
+	if (!is_whip && !is_srt)
+		return;
+
+	std::string ws_url = DegradeClient::WebSocketUrlForService(service);
+	if (ws_url.empty()) {
+		blog(LOG_WARNING, "[degrade] cannot derive degrade WS URL from the %s endpoint", protocol);
+		return;
+	}
+
+	std::lock_guard<std::mutex> lk(degradeMutex);
+
+	degradeEncoders.clear();
+	for (int i = 0; i < MAX_OUTPUT_VIDEO_ENCODERS; i++) {
+		obs_encoder_t *enc = obs_output_get_video_encoder2(output, i);
+		if (!enc)
+			break;
+		degradeEncoders.emplace_back(enc);
+	}
+
+	if (degradeEncoders.empty())
+		return;
+
+	degradeFullLayers = (int)degradeEncoders.size();
+	degradeCurLayers = degradeFullLayers;
+	degradeTargetLayers = degradeFullLayers;
+	degradeCurPct = 100;
+	degradeActive = true;
+	degradeRestartQueued.store(false);
+
+	blog(LOG_INFO, "[degrade] executor starting for %s (%d layer(s), ws=%s)", protocol, degradeFullLayers,
+	     ws_url.c_str());
+
+	degradeClient = std::make_unique<DegradeClient>();
+	degradeClient->Start(ws_url, [this](int layers, int pct) { ApplyDegradeTarget(layers, pct); });
+}
+
+void BasicOutputHandler::StopDegrade()
+{
+	std::unique_ptr<DegradeClient> client;
+	{
+		std::lock_guard<std::mutex> lk(degradeMutex);
+		degradeActive = false;
+		degradeRestartQueued.store(false);
+		client = std::move(degradeClient);
+		degradeEncoders.clear();
+		degradeFullLayers = 0;
+		degradeCurLayers = 0;
+		degradeTargetLayers = 0;
+		degradeCurPct = 100;
+	}
+
+	// Join outside the lock: a callback still in flight needs degradeMutex.
+	if (client)
+		client->Stop();
+}
+
+void BasicOutputHandler::ApplyDegradeTarget(int layers, int bitratePercent)
+{
+	std::lock_guard<std::mutex> lk(degradeMutex);
+
+	if (!degradeActive)
+		return;
+
+	const int full = degradeFullLayers;
+	int want = layers > 0 ? std::min(layers, full) : full;
+	want = std::clamp(want, 1, full > 0 ? full : 1);
+	bitratePercent = std::clamp(bitratePercent, 1, 100);
+
+	const bool layers_changed = (full > 1) && (want != degradeTargetLayers);
+	const bool pct_changed = (bitratePercent != degradeCurPct);
+
+	blog(LOG_INFO, "[degrade] TARGET layers=%d bitrate=%d%% (current layers=%d bitrate=%d%%)", layers,
+	     bitratePercent, degradeCurLayers, degradeCurPct);
+
+	// Idempotency (§R3): already at target -> do nothing, no restart.
+	if (!layers_changed && !pct_changed)
+		return;
+
+	OBSOutputAutoRelease output = StreamingOutput();
+	if (!output) {
+		blog(LOG_WARNING, "[degrade] no streaming output to apply target");
+		return;
+	}
+
+	if (pct_changed) {
+		ApplyDegradeBitrate(bitratePercent);
+		degradeCurPct = bitratePercent;
+	}
+
+	if (layers_changed) {
+		// §R4: merge back-to-back layer changes into a single restart,
+		// and run it on the Qt main thread - see PerformDegradeRestart.
+		blog(LOG_INFO, "[degrade] layer change %d -> %d requested, queuing restart", degradeCurLayers, want);
+		degradeTargetLayers = want;
+
+		if (!degradeRestartQueued.exchange(true)) {
+			OBSBasic *m = main;
+			QMetaObject::invokeMethod(
+				m,
+				[this, m]() {
+					// The handler may have been torn down (profile
+					// switch / app exit) before this ran.
+					if (!m || m->outputHandler.get() != this)
+						return;
+					PerformDegradeRestart();
+				},
+				Qt::QueuedConnection);
+		}
+	}
+}
+
+void BasicOutputHandler::PerformDegradeRestart()
+{
+	std::lock_guard<std::mutex> lk(degradeMutex);
+
+	degradeRestartQueued.store(false);
+	if (!degradeActive)
+		return;
+
+	OBSOutputAutoRelease output = StreamingOutput();
+	if (!output)
+		return;
+
+	const int want = degradeTargetLayers;
+	blog(LOG_INFO, "[degrade] restarting stream at %d layer(s)", want);
+
+	obs_output_stop(output);
+	for (int i = 0; i < 300 && obs_output_active(output); i++)
+		os_sleep_ms(10);
+
+	if (obs_output_active(output)) {
+		blog(LOG_WARNING, "[degrade] output did not stop in time, keeping current layer count");
+		degradeTargetLayers = degradeCurLayers;
+		return;
+	}
+
+	RebindDegradeLayers(output, want);
+	degradeCurLayers = want;
+
+	if (!obs_output_start(output)) {
+		const char *err = obs_output_get_last_error(output);
+		blog(LOG_WARNING, "[degrade] failed to restart output%s%s", err ? ": " : "", err ? err : "");
+	}
+}
+
+void BasicOutputHandler::ApplyDegradeBitrate(int bitratePercent)
+{
+	for (auto &encoder : degradeEncoders) {
+		obs_encoder_t *enc = encoder.Get();
+		if (!enc)
+			continue;
+
+		OBSDataAutoRelease settings = obs_encoder_get_settings(enc);
+		int bitrate = (int)obs_data_get_int(settings, "bitrate");
+		if (bitrate < 1)
+			bitrate = 20000;
+
+		// Cache the original bitrate per encoder so repeated
+		// degrade/recover cycles never compound off a scaled value.
+		int base = (int)obs_data_get_int(settings, "base_bitrate");
+		if (base == 0) {
+			obs_data_set_int(settings, "base_bitrate", bitrate);
+			base = bitrate;
+		}
+
+		long long scaled = (long long)base * bitratePercent / 100LL;
+		if (scaled < 1)
+			scaled = 1;
+		obs_data_set_int(settings, "bitrate", (int)scaled);
+
+		int max_base = (int)obs_data_get_int(settings, "base_max_bitrate");
+		if (max_base == 0)
+			max_base = (int)obs_data_get_int(settings, "max_bitrate");
+		if (max_base > 0) {
+			obs_data_set_int(settings, "base_max_bitrate", max_base);
+			long long scaled_max = (long long)max_base * bitratePercent / 100LL;
+			if (scaled_max < scaled)
+				scaled_max = scaled;
+			obs_data_set_int(settings, "max_bitrate", (int)scaled_max);
+		}
+
+		obs_encoder_update(enc, settings);
+	}
+}
+
+void BasicOutputHandler::RebindDegradeLayers(obs_output_t *output, int layers)
+{
+	const int full = (int)degradeEncoders.size();
+	if (full <= 0)
+		return;
+
+	layers = std::clamp(layers, 1, full);
+
+	// §R6: reducing layers drops the highest-resolution layer(s) and
+	// keeps the lowest. Bound slots are ordered high (0) to low
+	// (full-1), so keep the last `layers` and renumber them into slots
+	// 0..layers-1 (the outputs build rid/track indices from slot order).
+	const int start = full - layers;
+	for (int i = 0; i < layers; i++)
+		obs_output_set_video_encoder2(output, degradeEncoders[start + i].Get(), i);
+	for (int i = layers; i < full; i++)
+		obs_output_set_video_encoder2(output, nullptr, i);
+
+	blog(LOG_INFO, "[degrade] rebound %d of %d encoder slot(s) (kept lowest-resolution)", layers, full);
 }
 
 BasicOutputHandler *CreateSimpleOutputHandler(OBSBasic *main)

@@ -13,6 +13,10 @@ endif()
 
 find_package(FFmpeg REQUIRED COMPONENTS avcodec avutil avformat)
 find_package(CURL REQUIRED)
+# mmx degrade executor (utility/DegradeClient): WebSocket client + JSON.
+find_package(nlohmann_json 3.11 REQUIRED)
+find_package(Websocketpp 0.8 REQUIRED)
+find_package(Asio 1.12.1 REQUIRED)
 
 if(NOT TARGET OBS::json11)
   add_subdirectory("${CMAKE_SOURCE_DIR}/deps/json11" json11)
@@ -45,7 +49,14 @@ target_link_libraries(
     OBS::json11
     OBS::bpm
     OBS::abs-ts
+    nlohmann_json::nlohmann_json
+    Websocketpp::Websocketpp
+    Asio::Asio
 )
+
+if(OS_WINDOWS)
+  target_compile_definitions(obs-studio PRIVATE _WEBSOCKETPP_CPP11_STL_)
+endif()
 
 include(cmake/ui-components.cmake)
 include(cmake/ui-dialogs.cmake)

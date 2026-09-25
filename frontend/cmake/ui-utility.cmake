@@ -8,6 +8,8 @@ target_sources(
     utility/BasicOutputHandler.hpp
     utility/CrashHandler.cpp
     utility/CrashHandler.hpp
+    utility/DegradeClient.cpp
+    utility/DegradeClient.hpp
     utility/FFmpegCodec.cpp
     utility/FFmpegCodec.hpp
     utility/FFmpegFormat.cpp
