@@ -2100,7 +2100,7 @@
                 <property name="title">
                  <string>Basic.Settings.Stream.WHIPSimulcastLabel</string>
                 </property>
-                <layout class="QVBoxLayout" name="verticalLayout_35">
+                <layout class="QVBoxLayout" name="whipSimulcastLayout">
                  <property name="leftMargin">
                   <number>9</number>
                  </property>
@@ -8944,11 +8944,127 @@
                   </layout>
                  </widget>
                 </item>
-                <item>
-                 <widget class="QGroupBox" name="advNetworkGroupBox">
-                  <property name="title">
-                   <string>Basic.Settings.Advanced.Network</string>
-                  </property>
+                 <item>
+                  <widget class="QGroupBox" name="packetLossReconnectGroupBox">
+                   <property name="title">
+                    <string>Basic.Settings.Advanced.PacketLossReconnect</string>
+                   </property>
+                   <layout class="QFormLayout" name="formLayout_packetLoss">
+                    <property name="fieldGrowthPolicy">
+                     <enum>QFormLayout::AllNonFixedFieldsGrow</enum>
+                    </property>
+                    <property name="labelAlignment">
+                     <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+                    </property>
+                    <property name="topMargin">
+                     <number>2</number>
+                    </property>
+                    <item row="0" column="0">
+                     <spacer name="horizontalSpacer_packetLoss">
+                      <property name="orientation">
+                       <enum>Qt::Horizontal</enum>
+                      </property>
+                      <property name="sizeHint" stdset="0">
+                       <size>
+                        <width>170</width>
+                        <height>20</height>
+                       </size>
+                      </property>
+                     </spacer>
+                    </item>
+                    <item row="0" column="1">
+                     <widget class="QCheckBox" name="packetLossReconnectEnable">
+                      <property name="text">
+                       <string>Basic.Settings.Advanced.PacketLossReconnect.Enable</string>
+                      </property>
+                      <property name="checked">
+                       <bool>true</bool>
+                      </property>
+                     </widget>
+                    </item>
+                    <item row="1" column="0">
+                     <widget class="QLabel" name="packetLossStatPeriodLabel">
+                      <property name="text">
+                       <string>Basic.Settings.Advanced.PacketLossReconnect.StatPeriod</string>
+                      </property>
+                      <property name="buddy">
+                       <cstring>packetLossStatPeriodSec</cstring>
+                      </property>
+                     </widget>
+                    </item>
+                    <item row="1" column="1">
+                     <widget class="QSpinBox" name="packetLossStatPeriodSec">
+                      <property name="suffix">
+                       <string> s</string>
+                      </property>
+                      <property name="minimum">
+                       <number>1</number>
+                      </property>
+                      <property name="maximum">
+                       <number>60</number>
+                      </property>
+                     </widget>
+                    </item>
+                    <item row="2" column="0">
+                     <widget class="QLabel" name="packetLossWindowLabel">
+                      <property name="text">
+                       <string>Basic.Settings.Advanced.PacketLossReconnect.Window</string>
+                      </property>
+                      <property name="buddy">
+                       <cstring>packetLossWindowSec</cstring>
+                      </property>
+                     </widget>
+                    </item>
+                    <item row="2" column="1">
+                     <widget class="QSpinBox" name="packetLossWindowSec">
+                      <property name="suffix">
+                       <string> s</string>
+                      </property>
+                      <property name="minimum">
+                       <number>10</number>
+                      </property>
+                      <property name="maximum">
+                       <number>600</number>
+                      </property>
+                     </widget>
+                    </item>
+                    <item row="3" column="0">
+                     <widget class="QLabel" name="packetLossThresholdLabel">
+                      <property name="text">
+                       <string>Basic.Settings.Advanced.PacketLossReconnect.Threshold</string>
+                      </property>
+                      <property name="buddy">
+                       <cstring>packetLossThresholdPercent</cstring>
+                      </property>
+                     </widget>
+                    </item>
+                    <item row="3" column="1">
+                     <widget class="QDoubleSpinBox" name="packetLossThresholdPercent">
+                      <property name="suffix">
+                       <string> %</string>
+                      </property>
+                      <property name="decimals">
+                       <number>2</number>
+                      </property>
+                      <property name="minimum">
+                       <double>0.010000000000000</double>
+                      </property>
+                      <property name="maximum">
+                       <double>100.000000000000000</double>
+                      </property>
+                      <property name="singleStep">
+                       <double>0.100000000000000</double>
+                      </property>
+                     </widget>
+                    </item>
+                   </layout>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QGroupBox" name="advNetworkGroupBox">
+                   <property name="title">
+                    <string>Basic.Settings.Advanced.Network</string>
+                   </property>
                   <layout class="QFormLayout" name="formLayout_23">
                    <property name="fieldGrowthPolicy">
                     <enum>QFormLayout::AllNonFixedFieldsGrow</enum>

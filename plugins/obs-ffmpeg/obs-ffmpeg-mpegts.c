@@ -675,6 +675,8 @@ static void get_srt_stats_proc(void *data, calldata_t *cd)
 {
 	struct ffmpeg_output *stream = data;
 	double packet_loss_percent = 0.0;
+	int64_t packets_expected = 0;
+	int64_t packets_lost = 0;
 	bool valid = false;
 
 	if (stream->ff_data.config.is_srt && os_atomic_load_bool(&stream->running) && stream->h &&
@@ -686,7 +688,15 @@ static void get_srt_stats_proc(void *data, calldata_t *cd)
 		 * periodic bandwidth/RTT logging and the session summary logged
 		 * on close. */
 		if (srt_bstats(s->fd, &perf, 0) == 0) {
+			/* Cumulative counters since the session started. The
+			 * frontend samples these and derives windowed loss, so
+			 * it needs the raw totals rather than the running
+			 * percentage. packets_expected is the number of packets
+			 * the sender attempted (delivered + unrecoverably
+			 * dropped after retransmission). */
 			int64_t attempted = perf.pktSentTotal + perf.pktSndLossTotal;
+			packets_expected = attempted;
+			packets_lost = perf.pktSndLossTotal;
 			if (attempted > 0)
 				packet_loss_percent = (double)perf.pktSndLossTotal / (double)attempted * 100.0;
 			valid = true;
@@ -695,6 +705,8 @@ static void get_srt_stats_proc(void *data, calldata_t *cd)
 
 	calldata_set_bool(cd, "valid", valid);
 	calldata_set_float(cd, "packet_loss_percent", packet_loss_percent);
+	calldata_set_int(cd, "packets_expected", packets_expected);
+	calldata_set_int(cd, "packets_lost", packets_lost);
 }
 
 static void *ffmpeg_mpegts_create(obs_data_t *settings, obs_output_t *output)
@@ -715,8 +727,9 @@ static void *ffmpeg_mpegts_create(obs_data_t *settings, obs_output_t *output)
 	av_log_set_callback(ffmpeg_mpegts_log_callback);
 
 	proc_handler_t *ph = obs_output_get_proc_handler(output);
-	proc_handler_add(ph, "void get_srt_stats(out bool valid, out float packet_loss_percent)", get_srt_stats_proc,
-			 data);
+	proc_handler_add(
+		ph, "void get_srt_stats(out bool valid, out float packet_loss_percent, out int packets_expected, out int packets_lost)",
+		get_srt_stats_proc, data);
 
 	UNUSED_PARAMETER(settings);
 	return data;

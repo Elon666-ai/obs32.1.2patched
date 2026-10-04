@@ -585,6 +585,10 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 	HookWidget(ui->reconnectMaxRetries,  SCROLL_CHANGED, ADV_CHANGED);
 	HookWidget(ui->whipDisconnectGraceSec,  SCROLL_CHANGED, ADV_CHANGED);
 	HookWidget(ui->whipReconnectBackoffSec, SCROLL_CHANGED, ADV_CHANGED);
+	HookWidget(ui->packetLossReconnectEnable,   CHECK_CHANGED,  ADV_CHANGED);
+	HookWidget(ui->packetLossStatPeriodSec,     SCROLL_CHANGED, ADV_CHANGED);
+	HookWidget(ui->packetLossWindowSec,         SCROLL_CHANGED, ADV_CHANGED);
+	HookWidget(ui->packetLossThresholdPercent,  DSCROLL_CHANGED, ADV_CHANGED);
 	HookWidget(ui->processPriority,      COMBO_CHANGED,  ADV_CHANGED);
 	HookWidget(ui->confirmOnExit,        CHECK_CHANGED,  ADV_CHANGED);
 	HookWidget(ui->bindToIP,             COMBO_CHANGED,  ADV_CHANGED);
@@ -2648,6 +2652,12 @@ void OBSBasicSettings::LoadAdvancedSettings()
 	int maxRetries = config_get_int(main->Config(), "Output", "MaxRetries");
 	int whipDisconnectGraceSec = config_get_int(main->Config(), "Output", "WhipDisconnectGraceSec");
 	int whipReconnectBackoffSec = config_get_int(main->Config(), "Output", "WhipReconnectBackoffSec");
+	bool packetLossReconnect = config_has_user_value(main->Config(), "Output", "PacketLossReconnect")
+					   ? config_get_bool(main->Config(), "Output", "PacketLossReconnect")
+					   : true;
+	int packetLossStatPeriodSec = config_get_int(main->Config(), "Output", "PacketLossStatPeriodSec");
+	int packetLossWindowSec = config_get_int(main->Config(), "Output", "PacketLossWindowSec");
+	double packetLossThresholdPercent = config_get_double(main->Config(), "Output", "PacketLossThresholdPercent");
 	const char *filename = config_get_string(main->Config(), "Output", "FilenameFormatting");
 	bool overwriteIfExists = config_get_bool(main->Config(), "Output", "OverwriteIfExists");
 	const char *bindIP = config_get_string(main->Config(), "Output", "BindIP");
@@ -2685,6 +2695,11 @@ void OBSBasicSettings::LoadAdvancedSettings()
 	ui->reconnectMaxRetries->setValue(maxRetries);
 	ui->whipDisconnectGraceSec->setValue(whipDisconnectGraceSec);
 	ui->whipReconnectBackoffSec->setValue(whipReconnectBackoffSec);
+
+	ui->packetLossReconnectEnable->setChecked(packetLossReconnect);
+	ui->packetLossStatPeriodSec->setValue(packetLossStatPeriodSec > 0 ? packetLossStatPeriodSec : 10);
+	ui->packetLossWindowSec->setValue(packetLossWindowSec > 0 ? packetLossWindowSec : 60);
+	ui->packetLossThresholdPercent->setValue(packetLossThresholdPercent > 0.0 ? packetLossThresholdPercent : 1.2);
 
 	ui->streamDelaySec->setValue(delaySec);
 	ui->streamDelayPreserve->setChecked(preserveDelay);
@@ -3357,6 +3372,12 @@ void OBSBasicSettings::SaveAdvancedSettings()
 	SaveSpinBox(ui->reconnectMaxRetries, "Output", "MaxRetries");
 	SaveSpinBox(ui->whipDisconnectGraceSec, "Output", "WhipDisconnectGraceSec");
 	SaveSpinBox(ui->whipReconnectBackoffSec, "Output", "WhipReconnectBackoffSec");
+	SaveCheckBox(ui->packetLossReconnectEnable, "Output", "PacketLossReconnect");
+	SaveSpinBox(ui->packetLossStatPeriodSec, "Output", "PacketLossStatPeriodSec");
+	SaveSpinBox(ui->packetLossWindowSec, "Output", "PacketLossWindowSec");
+	if (WidgetChanged(ui->packetLossThresholdPercent))
+		config_set_double(main->Config(), "Output", "PacketLossThresholdPercent",
+				  ui->packetLossThresholdPercent->value());
 	SaveComboData(ui->bindToIP, "Output", "BindIP");
 	SaveComboData(ui->ipFamily, "Output", "IPFamily");
 	SaveCheckBox(ui->autoRemux, "Video", "AutoRemux");

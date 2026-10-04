@@ -19,6 +19,7 @@ target_sources(
   obs-webrtc
   PRIVATE obs-webrtc.cpp whip-output.cpp whip-output.h whip-service.cpp whip-service.h whip-utils.h
           motion-roi.cpp motion-roi.h quality-score.cpp quality-score.h
+          rtp-loss-observer.cpp rtp-loss-observer.h
 )
 
 target_link_libraries(

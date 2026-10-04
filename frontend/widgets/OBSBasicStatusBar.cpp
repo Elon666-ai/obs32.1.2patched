@@ -363,6 +363,40 @@ void OBSBasicStatusBar::UpdateDroppedFrames()
 	}
 }
 
+static PacketLossReconnectConfig BuildLossReconnectConfig(OBSBasic *main)
+{
+	PacketLossReconnectConfig cfg;
+	if (!main)
+		return cfg;
+
+	config_t *config = main->Config();
+
+	// Default on: the feature is only "off" when explicitly disabled.
+	cfg.enabled = config_has_user_value(config, "Output", "PacketLossReconnect")
+			      ? config_get_bool(config, "Output", "PacketLossReconnect")
+			      : true;
+
+	const int period = config_get_int(config, "Output", "PacketLossStatPeriodSec");
+	const int window = config_get_int(config, "Output", "PacketLossWindowSec");
+	const double threshold = config_get_double(config, "Output", "PacketLossThresholdPercent");
+	if (period > 0)
+		cfg.period_sec = period;
+	if (window > 0)
+		cfg.window_sec = window;
+	if (threshold > 0.0)
+		cfg.threshold_percent = threshold;
+
+	cfg.reconnect_enabled = config_get_bool(config, "Output", "Reconnect");
+	cfg.max_retries = config_get_int(config, "Output", "MaxRetries");
+	cfg.retry_delay_sec = config_get_int(config, "Output", "RetryDelay");
+
+	obs_service_t *service = main->GetService();
+	const char *protocol = service ? obs_service_get_protocol(service) : nullptr;
+	cfg.is_whip = protocol && astrcmpi(protocol, "WHIP") == 0;
+
+	return cfg;
+}
+
 static void LogSRTStats(obs_output_t *output)
 {
 	proc_handler_t *ph = obs_output_get_proc_handler(output);
@@ -466,6 +500,15 @@ void OBSBasicStatusBar::UpdateStatusBar()
 
 	UpdateDroppedFrames();
 
+	/* packet-loss reconnect monitor (SRT unrecoverable loss / RTP loss) */
+	if (streamOutput) {
+		OBSOutput output = OBSGetStrongRef(streamOutput);
+		if (output)
+			lossMonitor.Tick(output, BuildLossReconnectConfig(main));
+	} else {
+		lossMonitor.Reset();
+	}
+
 	/* log SRT stats every 10 seconds */
 	static int srtLogCounter = 0;
 	if (streamOutput) {
@@ -521,6 +564,7 @@ void OBSBasicStatusBar::StreamDelayStopping(int sec)
 void OBSBasicStatusBar::StreamStarted(obs_output_t *output)
 {
 	streamOutput = OBSGetWeakRef(output);
+	lossMonitor.Reset();
 
 	streamSigs.emplace_back(obs_output_get_signal_handler(output), "reconnect", OBSOutputReconnect, this);
 	streamSigs.emplace_back(obs_output_get_signal_handler(output), "reconnect_success", OBSOutputReconnectSuccess,
@@ -536,6 +580,7 @@ void OBSBasicStatusBar::StreamStopped()
 {
 	if (streamOutput) {
 		streamSigs.clear();
+		lossMonitor.Reset();
 
 		ReconnectClear();
 		streamOutput = nullptr;

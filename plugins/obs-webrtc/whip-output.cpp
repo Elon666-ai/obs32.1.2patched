@@ -70,6 +70,15 @@ WHIPOutput::WHIPOutput(obs_data_t *, obs_output_t *output)
 	// scorer's decode thread (see quality-score.cpp).
 	signal_handler_add(obs_output_get_signal_handler(output),
 			   "void quality_score(ptr output, float score, float psnr)");
+
+	// Receiver-reported RTP packet loss, sampled by the frontend's
+	// packet-loss reconnect monitor (Settings > Advanced > RTP Packet
+	// Loss Reconnect). Same interface shape as the SRT muxer's
+	// get_srt_stats proc, so the monitor can treat both uniformly.
+	if (proc_handler_t *ph = obs_output_get_proc_handler(output))
+		proc_handler_add(
+			ph, "void get_rtp_stats(out bool valid, out int packets_expected, out int packets_lost)",
+			GetRtpStatsProc, this);
 }
 
 WHIPOutput::~WHIPOutput()
@@ -372,13 +381,17 @@ void WHIPOutput::ConfigureAudioTrack(std::string media_stream_id, std::string cn
 	auto new_audio_sr_reporter = std::make_shared<rtc::RtcpSrReporter>(rtp_config);
 	auto nack_responder = std::make_shared<rtc::RtcpNackResponder>();
 
+	auto audio_loss_observer = std::make_shared<RtpLossObserver>();
+
 	packetizer->addToChain(new_audio_sr_reporter);
 	packetizer->addToChain(nack_responder);
+	packetizer->addToChain(audio_loss_observer);
 	new_audio_track->setMediaHandler(packetizer);
 
 	std::unique_lock<std::shared_mutex> lk(tracks_mutex);
 	audio_track = new_audio_track;
 	audio_sr_reporter = new_audio_sr_reporter;
+	this->audio_loss_observer = std::move(audio_loss_observer);
 }
 
 void WHIPOutput::ConfigureVideoTrack(std::string media_stream_id, std::string cname)
@@ -454,6 +467,9 @@ void WHIPOutput::ConfigureVideoTrack(std::string media_stream_id, std::string cn
 	packetizer->addToChain(new_video_sr_reporter);
 	packetizer->addToChain(std::make_shared<rtc::RtcpNackResponder>(video_nack_buffer_size));
 
+	auto video_loss_observer = std::make_shared<RtpLossObserver>();
+	packetizer->addToChain(video_loss_observer);
+
 	// Pacing is opt-in via whip_enable_pacing, off by default.
 	//
 	// Two RTC worker crashes (2026-09-02 and 2026-09-06) both faulted at
@@ -525,6 +541,7 @@ void WHIPOutput::ConfigureVideoTrack(std::string media_stream_id, std::string cn
 	std::unique_lock<std::shared_mutex> lk(tracks_mutex);
 	video_track = new_video_track;
 	video_sr_reporter = new_video_sr_reporter;
+	this->video_loss_observer = std::move(video_loss_observer);
 }
 
 /**
@@ -1537,6 +1554,33 @@ void WHIPOutput::Send(void *data, uintptr_t size, uint64_t duration, std::shared
 	} catch (const std::exception &e) {
 		do_log(LOG_ERROR, "error: %s ", e.what());
 	}
+}
+
+void WHIPOutput::GetRtpStatsProc(void *data, calldata_t *cd)
+{
+	auto *self = static_cast<WHIPOutput *>(data);
+
+	uint64_t expected = 0;
+	uint64_t lost = 0;
+	bool valid = false;
+
+	{
+		std::shared_lock<std::shared_mutex> lock(self->tracks_mutex);
+		if (self->video_loss_observer) {
+			expected += self->video_loss_observer->GetExpected();
+			lost += self->video_loss_observer->GetLost();
+			valid = true;
+		}
+		if (self->audio_loss_observer) {
+			expected += self->audio_loss_observer->GetExpected();
+			lost += self->audio_loss_observer->GetLost();
+			valid = true;
+		}
+	}
+
+	calldata_set_bool(cd, "valid", valid);
+	calldata_set_int(cd, "packets_expected", (long long)expected);
+	calldata_set_int(cd, "packets_lost", (long long)lost);
 }
 
 void register_whip_output()
