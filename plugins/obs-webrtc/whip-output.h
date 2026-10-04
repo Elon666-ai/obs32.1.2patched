@@ -2,8 +2,10 @@
 
 #include "motion-roi.h"
 #include "quality-score.h"
+#include "rtp-loss-observer.h"
 
 #include <obs-module.h>
+#include <callback/calldata.h>
 #include <util/curl/curl-helper.h>
 #include <util/platform.h>
 #include <util/base.h>
@@ -66,6 +68,10 @@ private:
 	void ClosePeerConnectionWithTimeout(std::shared_ptr<rtc::PeerConnection> pc);
 	void ApplyRoi();
 
+	// get_rtp_stats proc handler: exposes receiver-reported RTP loss from
+	// the RTCP observers to the frontend.
+	static void GetRtpStatsProc(void *data, calldata_t *cd);
+
 	obs_output_t *output;
 
 	std::string endpoint_url;
@@ -122,6 +128,12 @@ private:
 	std::shared_ptr<rtc::Track> video_track;
 	std::shared_ptr<rtc::RtcpSrReporter> audio_sr_reporter;
 	std::shared_ptr<rtc::RtcpSrReporter> video_sr_reporter;
+
+	// Accumulate receiver-reported RTP loss from incoming RTCP. One
+	// instance per track: a MediaHandler cannot be shared across chains
+	// (its chain link is stored in the handler itself).
+	std::shared_ptr<RtpLossObserver> audio_loss_observer;
+	std::shared_ptr<RtpLossObserver> video_loss_observer;
 
 	// Data channel carrying {frame_no, timestamp, rid} JSON per video
 	// frame per simulcast layer; see docs/obs-abs-timestamp-protocol.md.

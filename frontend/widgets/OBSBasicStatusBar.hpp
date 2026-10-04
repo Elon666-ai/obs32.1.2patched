@@ -3,6 +3,7 @@
 #include "StatusBarWidget.hpp"
 
 #include <obs.hpp>
+#include <utility/PacketLossMonitor.hpp>
 
 #include <QPointer>
 #include <QStatusBar>
@@ -43,6 +44,11 @@ private:
 	int seconds = 0;
 	uint64_t lastBytesSent = 0;
 	uint64_t lastBytesSentTime = 0;
+
+	// Samples SRT/WHIP packet-loss counters and disconnects+reconnects
+	// when the configured window exceeds the configured threshold
+	// (Settings > Advanced > RTP Packet Loss Reconnect).
+	PacketLossMonitor lossMonitor;
 
 	QPixmap excellentPixmap;
 	QPixmap goodPixmap;
