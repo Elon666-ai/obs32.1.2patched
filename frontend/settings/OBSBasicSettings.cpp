@@ -2697,9 +2697,9 @@ void OBSBasicSettings::LoadAdvancedSettings()
 	ui->whipReconnectBackoffSec->setValue(whipReconnectBackoffSec);
 
 	ui->packetLossReconnectEnable->setChecked(packetLossReconnect);
-	ui->packetLossStatPeriodSec->setValue(packetLossStatPeriodSec > 0 ? packetLossStatPeriodSec : 10);
-	ui->packetLossWindowSec->setValue(packetLossWindowSec > 0 ? packetLossWindowSec : 60);
-	ui->packetLossThresholdPercent->setValue(packetLossThresholdPercent > 0.0 ? packetLossThresholdPercent : 1.2);
+	ui->packetLossStatPeriodSec->setValue(packetLossStatPeriodSec > 0 ? packetLossStatPeriodSec : 30);
+	ui->packetLossWindowSec->setValue(packetLossWindowSec > 0 ? packetLossWindowSec : 300);
+	ui->packetLossThresholdPercent->setValue(packetLossThresholdPercent > 0.0 ? packetLossThresholdPercent : 1.5);
 
 	ui->streamDelaySec->setValue(delaySec);
 	ui->streamDelayPreserve->setChecked(preserveDelay);

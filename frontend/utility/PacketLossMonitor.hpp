@@ -9,10 +9,10 @@ typedef struct obs_output obs_output_t;
 // User-configurable knobs for the packet-loss reconnect feature
 // (Settings > Advanced > RTP Packet Loss Reconnect).
 struct PacketLossReconnectConfig {
-	bool enabled = false;
-	int period_sec = 10;
-	int window_sec = 60;
-	double threshold_percent = 1.2;
+	bool enabled = true;
+	int period_sec = 30;
+	int window_sec = 300;
+	double threshold_percent = 1.5;
 
 	// Used only to guarantee the output can actually reconnect when the
 	// loss threshold trips, even if the generic Reconnect option is off.
