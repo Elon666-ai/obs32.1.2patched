@@ -85,9 +85,9 @@ void PacketLossMonitor::Tick(obs_output_t *output, const PacketLossReconnectConf
 		return;
 	}
 
-	const int period = cfg.period_sec > 0 ? cfg.period_sec : 10;
-	const int window_sec = cfg.window_sec > 0 ? cfg.window_sec : 60;
-	const double threshold = cfg.threshold_percent > 0.0 ? cfg.threshold_percent : 1.2;
+	const int period = cfg.period_sec > 0 ? cfg.period_sec : 30;
+	const int window_sec = cfg.window_sec > 0 ? cfg.window_sec : 300;
+	const double threshold = cfg.threshold_percent > 0.0 ? cfg.threshold_percent : 1.5;
 
 	const uint64_t now = os_gettime_ns();
 	const uint64_t period_ns = (uint64_t)period * 1000000000ULL;
