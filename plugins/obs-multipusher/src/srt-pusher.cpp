@@ -308,8 +308,10 @@ static void srt_pusher_encoded_packet(void* data, struct encoder_packet* packet)
         }
     }
 
-    AVPacket avpkt;
-    av_init_packet(&avpkt);
+    AVPacket avpkt{};
+    avpkt.pts          = AV_NOPTS_VALUE;
+    avpkt.dts          = AV_NOPTS_VALUE;
+    avpkt.pos          = -1;
     avpkt.data       = const_cast<uint8_t*>(pdata);
     avpkt.size       = (int)psize;
     avpkt.stream_index = stream_idx;
