@@ -1,0 +1,93 @@
+{
+  "siteName": "3drush-fwh",
+  "tencentSrt": {
+    "host": "publish.numericgame.ph",
+    "port": 9000,
+    "app": "live",
+    "tokenDays": 30
+  },
+  "input": {
+    "mode": "device",
+    "videoDevice": "OBS Virtual Camera",
+    "audioDevice": "",
+    "videoFile": "",
+    "videoLayout": "landscape"
+  },
+  "streams": [
+    {
+      "level": "bottom",
+      "streamName": "{siteName}_audio",
+      "audioOnly": true,
+      "videoCodec": "",
+      "videoBitrate": "",
+      "videoMaxrate": "",
+      "portraitWidth": 0,
+      "portraitHeight": 0,
+      "landscapeWidth": 0,
+      "landscapeHeight": 0,
+      "audioCodec": "aac",
+      "audioBitrate": "128k"
+    },
+    {
+      "level": "economic",
+      "streamName": "{siteName}_economic",
+      "audioOnly": false,
+      "videoCodec": "h264",
+      "videoBitrate": "400k",
+      "videoMaxrate": "600k",
+      "portraitWidth": 360,
+      "portraitHeight": 640,
+      "landscapeWidth": 640,
+      "landscapeHeight": 360,
+      "audioCodec": "aac",
+      "audioBitrate": "128k"
+    },
+    {
+      "level": "standard_hevc",
+      "streamName": "{siteName}_standard_hevc",
+      "audioOnly": false,
+      "videoCodec": "hevc",
+      "videoBitrate": "600k",
+      "videoMaxrate": "1000k",
+      "portraitWidth": 720,
+      "portraitHeight": 1280,
+      "landscapeWidth": 1280,
+      "landscapeHeight": 720,
+      "audioCodec": "aac",
+      "audioBitrate": "128k"
+    },
+    {
+      "level": "standard",
+      "streamName": "{siteName}_standard",
+      "audioOnly": false,
+      "videoCodec": "h264",
+      "videoBitrate": "1000k",
+      "videoMaxrate": "1500k",
+      "portraitWidth": 720,
+      "portraitHeight": 1280,
+      "landscapeWidth": 1280,
+      "landscapeHeight": 720,
+      "audioCodec": "aac",
+      "audioBitrate": "128k"
+    },
+    {
+      "level": "high",
+      "streamName": "{siteName}",
+      "audioOnly": false,
+      "videoCodec": "h264",
+      "videoBitrate": "2000k",
+      "videoMaxrate": "3000k",
+      "portraitWidth": 1080,
+      "portraitHeight": 1920,
+      "landscapeWidth": 1920,
+      "landscapeHeight": 1080,
+      "audioCodec": "aac",
+      "audioBitrate": "128k"
+    }
+  ],
+  "publish": {
+    "onReady": false,
+    "reconnectMinSeconds": 3,
+    "reconnectMaxSeconds": 60
+  }
+}
