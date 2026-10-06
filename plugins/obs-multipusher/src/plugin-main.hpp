@@ -10,7 +10,7 @@
 #include <memory>
 
 #define PLUGIN_NAME    "obs-multipusher"
-#define PLUGIN_VERSION "1.1.4"
+#define PLUGIN_VERSION "1.1.5"
 #define PLUGIN_AUTHOR  "Amor"
 #define PLUGIN_DESC    "Multi-stream ABR SRT publisher for Tencent Cloud Live. " \
                        "Encodes one source into four ABR streams and pushes via SRT."
