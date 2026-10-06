@@ -46,6 +46,15 @@ struct PublishConfig {
     int  reconnectMaxSeconds = 60;
 };
 
+/// One scheduled interval time slot (weekday-repeat).
+/// endMinutes <= startMinutes means the slot wraps past midnight into the
+/// next day (e.g. 22:00-06:00), matching OBS's scheduled-streaming semantics.
+struct IntervalSlot {
+    int  startMinutes = 0;   // minutes from midnight
+    int  endMinutes   = 0;
+    bool days[7]      = {false, false, false, false, false, false, false}; // 0=Mon..6=Sun
+};
+
 /// Complete multipusher configuration.
 struct MultipusherConfig {
     std::string siteName;         // "3drush-fwh"
@@ -54,6 +63,7 @@ struct MultipusherConfig {
     InputConfig       input;
     std::vector<StreamConfig> streams;
     PublishConfig     publish;
+    std::vector<IntervalSlot> intervals;  // scheduled-publishing time slots
 };
 
 /// Configuration manager: load / save / validate.
