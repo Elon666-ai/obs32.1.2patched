@@ -2,7 +2,7 @@
 
 OBS Studio 插件，将 `multipusher` Fyne 桌面推流器的功能集成到 OBS 内。采集 OBS 当前场景输出，编码为 4 路 ABR 视频流（H.264/HEVC），通过 Tencent SRT 推送到腾讯云直播，并提供 Qt6 可停靠面板（Dock）进行实时控制。
 
-- 版本：**v1.1.4**
+- 版本：**v1.1.5**
 - 作者：**Amor**
 - 语言：C++17
 - 许可证：与 OBS Studio 主项目一致

@@ -151,7 +151,7 @@ void InitPluginLogger() {
 #endif
         char timeBuf[32];
         strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &local);
-        fprintf(g_logFile, "=== obs-multipusher v1.1.4 log started at %s ===\n", timeBuf);
+        fprintf(g_logFile, "=== obs-multipusher v1.1.5 log started at %s ===\n", timeBuf);
         fflush(g_logFile);
     }
 }
