@@ -166,6 +166,29 @@ bool ConfigManager::Load(const std::string& path) {
         obs_data_release(pub);
     }
 
+    // intervals (scheduled-publishing time slots)
+    obs_data_array_t* intervalsArr = obs_data_get_array(data, "intervals");
+    if (intervalsArr) {
+        cfg_.intervals.clear();
+        size_t count = obs_data_array_count(intervalsArr);
+        for (size_t i = 0; i < count; ++i) {
+            obs_data_t* s = obs_data_array_item(intervalsArr, i);
+            IntervalSlot slot;
+            slot.startMinutes = static_cast<int>(obs_data_get_int(s, "start"));
+            slot.endMinutes   = static_cast<int>(obs_data_get_int(s, "end"));
+            slot.days[0] = obs_data_get_bool(s, "mon");
+            slot.days[1] = obs_data_get_bool(s, "tue");
+            slot.days[2] = obs_data_get_bool(s, "wed");
+            slot.days[3] = obs_data_get_bool(s, "thu");
+            slot.days[4] = obs_data_get_bool(s, "fri");
+            slot.days[5] = obs_data_get_bool(s, "sat");
+            slot.days[6] = obs_data_get_bool(s, "sun");
+            cfg_.intervals.push_back(slot);
+            obs_data_release(s);
+        }
+        obs_data_array_release(intervalsArr);
+    }
+
     obs_data_release(data);
 
     // Validate after load
@@ -228,6 +251,24 @@ bool ConfigManager::Save(const std::string& path) const {
     obs_data_set_int(pub, "reconnectMaxSeconds", cfg_.publish.reconnectMaxSeconds);
     obs_data_set_obj(data, "publish", pub);
     obs_data_release(pub);
+
+    obs_data_array_t* intervalsArr = obs_data_array_create();
+    for (auto& slot : cfg_.intervals) {
+        obs_data_t* s = obs_data_create();
+        obs_data_set_int(s, "start", slot.startMinutes);
+        obs_data_set_int(s, "end", slot.endMinutes);
+        obs_data_set_bool(s, "mon", slot.days[0]);
+        obs_data_set_bool(s, "tue", slot.days[1]);
+        obs_data_set_bool(s, "wed", slot.days[2]);
+        obs_data_set_bool(s, "thu", slot.days[3]);
+        obs_data_set_bool(s, "fri", slot.days[4]);
+        obs_data_set_bool(s, "sat", slot.days[5]);
+        obs_data_set_bool(s, "sun", slot.days[6]);
+        obs_data_array_push_back(intervalsArr, s);
+        obs_data_release(s);
+    }
+    obs_data_set_array(data, "intervals", intervalsArr);
+    obs_data_array_release(intervalsArr);
 
     std::string json = obs_data_get_json(data);
     obs_data_release(data);

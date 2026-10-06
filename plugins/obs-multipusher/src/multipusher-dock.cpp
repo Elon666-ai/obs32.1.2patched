@@ -11,7 +11,14 @@
 #include <QHeaderView>
 #include <QMainWindow>
 #include <QTimer>
+#include <QCheckBox>
+#include <QTimeEdit>
+#include <QDateTime>
+#include <QLayout>
+#include <array>
+#include <cstddef>
 #include <map>
+#include <vector>
 
 #define QSTRING(s) QString::fromStdString(s)
 #define TO_STD(q)   (q).toStdString()
@@ -64,7 +71,8 @@ MultipusherDock::MultipusherDock(QWidget* parent)
     auto* statusTimer = new QTimer(this);
     connect(statusTimer, &QTimer::timeout, this, [this]() {
         refreshStreamTable();
-        updatePubButton();
+        if (intervalMode_) updateIntervalControl();
+        updateButtons();
     });
     statusTimer->start(500);
 
@@ -127,6 +135,40 @@ void MultipusherDock::buildUI() {
 
     mainLayout->addLayout(row);
 
+    // ── Second row: interval (scheduled) publishing config ────────
+    auto* intervalHeader = new QHBoxLayout();
+    intervalHeader->addWidget(new QLabel("Interval:"));
+    addIntervalBtn_ = new QPushButton("Add Slot");
+    addIntervalBtn_->setMinimumWidth(80);
+    intervalHeader->addWidget(addIntervalBtn_);
+    intervalHeader->addStretch();
+
+    intervalButton_ = new QPushButton("Start Interval Pub");
+    intervalButton_->setMinimumWidth(150);
+    intervalButton_->setStyleSheet(
+        "QPushButton { font-weight:bold; padding:4px 12px; }"
+        "QPushButton:hover { background:#38a; color:white; }");
+    intervalHeader->addWidget(intervalButton_);
+    mainLayout->addLayout(intervalHeader);
+
+    intervalSlotsWidget_ = new QWidget();
+    intervalSlotsLayout_ = new QVBoxLayout(intervalSlotsWidget_);
+    intervalSlotsLayout_->setContentsMargins(0, 0, 0, 0);
+    intervalSlotsLayout_->setSpacing(2);
+    mainLayout->addWidget(intervalSlotsWidget_);
+
+    connect(addIntervalBtn_, &QPushButton::clicked, this, [this]() {
+        IntervalSlot s;
+        s.startMinutes = 9 * 60;
+        s.endMinutes   = 18 * 60;
+        for (int d = 0; d < 5; ++d) s.days[d] = true; // Mon-Fri default
+        if (ctx()) {
+            ctx()->config.GetMutable().intervals.push_back(s);
+            ctx()->config.Save(ctx()->config.Path());
+        }
+        rebuildIntervalRows();
+    });
+
     // Use activated() — fires only on user selection, never programmatically
     connect(siteNameCombo_, QOverload<int>::of(&QComboBox::activated),
             this, &MultipusherDock::onSiteNameChanged);
@@ -134,6 +176,8 @@ void MultipusherDock::buildUI() {
             this, &MultipusherDock::onStreamNameChanged);
     connect(pubButton_, &QPushButton::clicked,
             this, &MultipusherDock::onPubButtonClicked);
+    connect(intervalButton_, &QPushButton::clicked,
+            this, &MultipusherDock::onIntervalButtonClicked);
 
     // Stream table
     buildStreamTable();
@@ -226,6 +270,8 @@ void MultipusherDock::applyConfigToUI() {
     if (streamIdx >= 0) streamNameCombo_->setCurrentIndex(streamIdx);
     else streamNameCombo_->setCurrentText(QSTRING(cfg.siteName));
     streamNameCombo_->blockSignals(false);
+
+    rebuildIntervalRows();
 }
 
 void MultipusherDock::readUItoConfig() {
@@ -311,7 +357,7 @@ void MultipusherDock::appendLog(const QString& text) {
 // ── Start / Stop toggle ──────────────────────────────────────────
 
 void MultipusherDock::onPubButtonClicked() {
-    if (!ctx()) return;
+    if (!ctx() || intervalMode_) return;
 
     if (ctx()->publishing) {
         MP_LOG(LOG_INFO, "[obs-multipusher] user clicked Stop");
@@ -323,25 +369,237 @@ void MultipusherDock::onPubButtonClicked() {
                ctx()->qualityBoostPercent);
         ctx()->StartPublishing();
     }
+    updateButtons();
 }
 
-void MultipusherDock::updatePubButton() {
-    if (!pubButton_ || !ctx()) return;
+// ── Interval (scheduled) publishing ──────────────────────────────
+
+static const char* kIntervalDayNames[7] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
+
+void MultipusherDock::rebuildIntervalRows() {
+    if (!intervalSlotsLayout_ || !ctx()) return;
+
+    loadingIntervals_ = true;
+
+    // Tear down existing rows.
+    for (auto& r : intervalRows_)
+        if (r.rowWidget) r.rowWidget->deleteLater();
+    intervalRows_.clear();
+    while (QLayoutItem* item = intervalSlotsLayout_->takeAt(0)) {
+        if (item->widget()) item->widget()->deleteLater();
+        delete item;
+    }
+
+    for (auto& slot : ctx()->config.Get().intervals)
+        addIntervalRow(slot);
+
+    loadingIntervals_ = false;
+
+    updateButtons();
+}
+
+void MultipusherDock::addIntervalRow(const IntervalSlot& slot) {
+    auto* rowWidget = new QWidget(intervalSlotsWidget_);
+    auto* rowLayout = new QHBoxLayout(rowWidget);
+    rowLayout->setContentsMargins(0, 0, 0, 0);
+    rowLayout->setSpacing(4);
+
+    auto* start = new QTimeEdit(rowWidget);
+    start->setDisplayFormat("HH:mm");
+    start->setTime(QTime(0, 0).addSecs(slot.startMinutes * 60));
+    rowLayout->addWidget(start);
+
+    rowLayout->addWidget(new QLabel("to", rowWidget));
+
+    auto* end = new QTimeEdit(rowWidget);
+    end->setDisplayFormat("HH:mm");
+    end->setTime(QTime(0, 0).addSecs(slot.endMinutes * 60));
+    rowLayout->addWidget(end);
+
+    std::array<QCheckBox*, 7> dayChecks{};
+    for (int i = 0; i < 7; ++i) {
+        auto* check = new QCheckBox(kIntervalDayNames[i], rowWidget);
+        check->setChecked(slot.days[i]);
+        rowLayout->addWidget(check);
+        dayChecks[i] = check;
+        connect(check, &QCheckBox::toggled, this, [this]() { onIntervalEdited(); });
+    }
+
+    auto* remove = new QPushButton("X", rowWidget);
+    remove->setFixedWidth(24);
+    remove->setToolTip("Remove");
+    rowLayout->addWidget(remove);
+    rowLayout->addStretch(1);
+
+    intervalSlotsLayout_->addWidget(rowWidget);
+    intervalRows_.push_back({rowWidget, start, end, dayChecks, remove});
+
+    connect(start, &QTimeEdit::userTimeChanged, this, [this]() { onIntervalEdited(); });
+    connect(end, &QTimeEdit::userTimeChanged, this, [this]() { onIntervalEdited(); });
+    connect(remove, &QPushButton::clicked, this, [this, rowWidget]() {
+        for (size_t i = 0; i < intervalRows_.size(); ++i) {
+            if (intervalRows_[i].rowWidget == rowWidget) {
+                removeIntervalRow(i);
+                break;
+            }
+        }
+    });
+}
+
+void MultipusherDock::removeIntervalRow(size_t idx) {
+    if (idx >= intervalRows_.size()) return;
+
+    intervalRows_[idx].rowWidget->deleteLater();
+    intervalRows_.erase(intervalRows_.begin() + static_cast<std::ptrdiff_t>(idx));
+    onIntervalEdited();
+}
+
+void MultipusherDock::onIntervalEdited() {
+    if (loadingIntervals_ || !ctx()) return;
+
+    auto& cfg = ctx()->config.GetMutable();
+    cfg.intervals.clear();
+    for (auto& r : intervalRows_) {
+        IntervalSlot s;
+        s.startMinutes = QTime(0, 0).secsTo(r.start->time()) / 60;
+        s.endMinutes   = QTime(0, 0).secsTo(r.end->time()) / 60;
+        for (int d = 0; d < 7; ++d) s.days[d] = r.days[d]->isChecked();
+        cfg.intervals.push_back(s);
+    }
+    ctx()->config.Save(ctx()->config.Path());
+}
+
+// Current wall-clock coverage of any configured interval, mirroring
+// OBSBasic::CheckSchedule(): slots with end <= start wrap past midnight.
+bool MultipusherDock::intervalsActiveNow() const {
+    if (!ctx()) return false;
+
+    const auto& ivSlots = ctx()->config.Get().intervals;
+    if (ivSlots.empty()) return false;
+
+    QDateTime now = QDateTime::currentDateTime();
+    int dayIdx = now.date().dayOfWeek() - 1; // 0=Monday
+    if (dayIdx < 0 || dayIdx > 6) return false;
+    int prevDayIdx = (dayIdx + 6) % 7;
+
+    int nowMinutes = now.time().hour() * 60 + now.time().minute();
+
+    for (const auto& s : ivSlots) {
+        int start = s.startMinutes;
+        int end   = s.endMinutes;
+
+        if (end > start) {
+            if (s.days[dayIdx] && nowMinutes >= start && nowMinutes < end)
+                return true;
+            continue;
+        }
+
+        if (s.days[dayIdx] && nowMinutes >= start)
+            return true;
+        if (s.days[prevDayIdx] && nowMinutes < end)
+            return true;
+    }
+    return false;
+}
+
+// Only meaningful while interval mode is armed: keep the plugin's publishing
+// state in sync with whether the current time falls inside an interval.
+void MultipusherDock::updateIntervalControl() {
+    if (!intervalMode_ || !ctx()) return;
+
+    bool active = intervalsActiveNow();
+    if (active && !ctx()->publishing) {
+        ctx()->qualityBoostPercent = qualitySpin_ ? qualitySpin_->value() : 0;
+        MP_LOG(LOG_INFO, "[obs-multipusher] interval active -> starting publish");
+        ctx()->StartPublishing();
+    } else if (!active && ctx()->publishing) {
+        MP_LOG(LOG_INFO, "[obs-multipusher] interval inactive -> stopping publish");
+        ctx()->StopPublishing();
+    }
+}
+
+void MultipusherDock::onIntervalButtonClicked() {
+    if (!ctx()) return;
+
+    if (!intervalMode_) {
+        // Manual publishing owns the outputs; refuse to take over.
+        if (ctx()->publishing) return;
+
+        intervalMode_ = true;
+        MP_LOG(LOG_INFO, "[obs-multipusher] interval mode enabled");
+        updateIntervalControl();
+    } else {
+        intervalMode_ = false;
+        if (ctx()->publishing)
+            ctx()->StopPublishing();
+        MP_LOG(LOG_INFO, "[obs-multipusher] interval mode disabled");
+    }
+    updateButtons();
+}
+
+// Keep the two mutually-exclusive publish buttons and the interval editor in
+// sync with the current mode/publishing state.
+void MultipusherDock::updateButtons() {
+    if (!pubButton_ || !intervalButton_ || !ctx()) return;
+
+    const QString kStartPub        = QStringLiteral("Start Pub");
+    const QString kStopPub         = QStringLiteral("Stop Pub");
+    const QString kStartInterval   = QStringLiteral("Start Interval Pub");
+    const QString kStopInterval    = QStringLiteral("Stop Interval Pub");
+
+    const char* kGreenPub =
+        "QPushButton { font-weight:bold; padding:4px 12px; }"
+        "QPushButton:hover { background:#3a8; color:white; }";
+    const char* kRedPub =
+        "QPushButton { font-weight:bold; padding:4px 12px; background:#c44; color:white; }"
+        "QPushButton:hover { background:#e55; }";
+    const char* kBlueInterval =
+        "QPushButton { font-weight:bold; padding:4px 12px; }"
+        "QPushButton:hover { background:#38a; color:white; }";
+    const char* kRedInterval =
+        "QPushButton { font-weight:bold; padding:4px 12px; background:#c44; color:white; }"
+        "QPushButton:hover { background:#e55; }";
 
     bool pub = ctx()->publishing;
-    if (pub && pubButton_->text() != QStringLiteral("Stop Pub")) {
-        pubButton_->setText(QStringLiteral("Stop Pub"));
-        pubButton_->setStyleSheet(
-            "QPushButton { font-weight:bold; padding:4px 12px; background:#c44; color:white; }"
-            "QPushButton:hover { background:#e55; }");
-        // Disable bitrate+ while publishing
-        if (qualitySpin_) qualitySpin_->setEnabled(false);
-    } else if (!pub && pubButton_->text() != QStringLiteral("Start Pub")) {
-        pubButton_->setText(QStringLiteral("Start Pub"));
-        pubButton_->setStyleSheet(
-            "QPushButton { font-weight:bold; padding:4px 12px; }"
-            "QPushButton:hover { background:#3a8; color:white; }");
-        // Re-enable bitrate+ when stopped
-        if (qualitySpin_) qualitySpin_->setEnabled(true);
+
+    // 0 = idle, 1 = manual publishing, 2 = interval mode.
+    int state = intervalMode_ ? 2 : (pub ? 1 : 0);
+    if (state == lastButtonState_) return;
+    lastButtonState_ = state;
+
+    if (intervalMode_) {
+        // Interval mode owns publishing: manual Start Pub disabled, keeps
+        // its "Start Pub" label (it's not the thing that stops interval mode).
+        if (pubButton_->text() != kStartPub) pubButton_->setText(kStartPub);
+        pubButton_->setStyleSheet(kGreenPub);
+        pubButton_->setEnabled(false);
+
+        if (intervalButton_->text() != kStopInterval) intervalButton_->setText(kStopInterval);
+        intervalButton_->setStyleSheet(kRedInterval);
+        intervalButton_->setEnabled(true);
+    } else if (pub) {
+        // Manual publishing active: interval button disabled.
+        if (pubButton_->text() != kStopPub) pubButton_->setText(kStopPub);
+        pubButton_->setStyleSheet(kRedPub);
+        pubButton_->setEnabled(true);
+
+        if (intervalButton_->text() != kStartInterval) intervalButton_->setText(kStartInterval);
+        intervalButton_->setStyleSheet(kBlueInterval);
+        intervalButton_->setEnabled(false);
+    } else {
+        // Idle: both available.
+        if (pubButton_->text() != kStartPub) pubButton_->setText(kStartPub);
+        pubButton_->setStyleSheet(kGreenPub);
+        pubButton_->setEnabled(true);
+
+        if (intervalButton_->text() != kStartInterval) intervalButton_->setText(kStartInterval);
+        intervalButton_->setStyleSheet(kBlueInterval);
+        intervalButton_->setEnabled(true);
     }
+
+    // The interval editor is locked while interval mode is running.
+    bool editEnabled = !intervalMode_;
+    if (intervalSlotsWidget_) intervalSlotsWidget_->setEnabled(editEnabled);
+    if (addIntervalBtn_) addIntervalBtn_->setEnabled(editEnabled);
+    if (qualitySpin_) qualitySpin_->setEnabled(!pub && !intervalMode_);
 }
