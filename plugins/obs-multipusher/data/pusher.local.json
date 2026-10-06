@@ -89,5 +89,6 @@
     "onReady": false,
     "reconnectMinSeconds": 3,
     "reconnectMaxSeconds": 60
-  }
+  },
+  "intervals": []
 }
