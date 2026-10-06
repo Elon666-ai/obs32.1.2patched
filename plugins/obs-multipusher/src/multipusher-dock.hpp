@@ -17,7 +17,6 @@
 #include <QVBoxLayout>
 
 #include <array>
-#include <vector>
 
 #include <obs-frontend-api.h>
 
@@ -50,17 +49,8 @@ private:
     void readUItoConfig();
 
     // ── Interval (scheduled) publishing ──────────────────────────
-    struct IntervalRow {
-        QWidget*                  rowWidget = nullptr;
-        QTimeEdit*                start = nullptr;
-        QTimeEdit*                end = nullptr;
-        std::array<QCheckBox*, 7> days{};
-        QPushButton*              remove = nullptr;
-    };
-
-    void rebuildIntervalRows();
-    void addIntervalRow(const IntervalSlot& slot);
-    void removeIntervalRow(size_t idx);
+    void buildIntervalRow(QHBoxLayout* row);
+    void loadIntervalToUI();
     void onIntervalEdited();
     bool intervalsActiveNow() const;
     void updateIntervalControl();
@@ -72,14 +62,13 @@ private:
     QTableWidget* streamTable_       = nullptr;
     QLabel*       statusLabel_       = nullptr;
 
-    QPushButton*  intervalButton_      = nullptr;
-    QPushButton*  addIntervalBtn_      = nullptr;
-    QWidget*      intervalSlotsWidget_ = nullptr;
-    QVBoxLayout*  intervalSlotsLayout_ = nullptr;
-    std::vector<IntervalRow> intervalRows_;
-    bool          intervalMode_        = false;
-    bool          loadingIntervals_    = false;
-    int           lastButtonState_     = -1;
+    QPushButton*  intervalButton_   = nullptr;
+    QTimeEdit*    intervalStart_    = nullptr;
+    QTimeEdit*    intervalEnd_      = nullptr;
+    std::array<QCheckBox*, 7> intervalDays_{};
+    bool          intervalMode_     = false;
+    bool          loadingIntervals_ = false;
+    int           lastButtonState_  = -1;
 
     ConfigManager  config_;
 

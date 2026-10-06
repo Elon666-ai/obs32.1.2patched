@@ -136,38 +136,9 @@ void MultipusherDock::buildUI() {
     mainLayout->addLayout(row);
 
     // ── Second row: interval (scheduled) publishing config ────────
-    auto* intervalHeader = new QHBoxLayout();
-    intervalHeader->addWidget(new QLabel("Interval:"));
-    addIntervalBtn_ = new QPushButton("Add Slot");
-    addIntervalBtn_->setMinimumWidth(80);
-    intervalHeader->addWidget(addIntervalBtn_);
-    intervalHeader->addStretch();
-
-    intervalButton_ = new QPushButton("Start Interval Pub");
-    intervalButton_->setMinimumWidth(150);
-    intervalButton_->setStyleSheet(
-        "QPushButton { font-weight:bold; padding:4px 12px; }"
-        "QPushButton:hover { background:#38a; color:white; }");
-    intervalHeader->addWidget(intervalButton_);
-    mainLayout->addLayout(intervalHeader);
-
-    intervalSlotsWidget_ = new QWidget();
-    intervalSlotsLayout_ = new QVBoxLayout(intervalSlotsWidget_);
-    intervalSlotsLayout_->setContentsMargins(0, 0, 0, 0);
-    intervalSlotsLayout_->setSpacing(2);
-    mainLayout->addWidget(intervalSlotsWidget_);
-
-    connect(addIntervalBtn_, &QPushButton::clicked, this, [this]() {
-        IntervalSlot s;
-        s.startMinutes = 9 * 60;
-        s.endMinutes   = 18 * 60;
-        for (int d = 0; d < 5; ++d) s.days[d] = true; // Mon-Fri default
-        if (ctx()) {
-            ctx()->config.GetMutable().intervals.push_back(s);
-            ctx()->config.Save(ctx()->config.Path());
-        }
-        rebuildIntervalRows();
-    });
+    auto* intervalRow = new QHBoxLayout();
+    buildIntervalRow(intervalRow);
+    mainLayout->addLayout(intervalRow);
 
     // Use activated() — fires only on user selection, never programmatically
     connect(siteNameCombo_, QOverload<int>::of(&QComboBox::activated),
@@ -271,7 +242,7 @@ void MultipusherDock::applyConfigToUI() {
     else streamNameCombo_->setCurrentText(QSTRING(cfg.siteName));
     streamNameCombo_->blockSignals(false);
 
-    rebuildIntervalRows();
+    loadIntervalToUI();
 }
 
 void MultipusherDock::readUItoConfig() {
@@ -376,96 +347,80 @@ void MultipusherDock::onPubButtonClicked() {
 
 static const char* kIntervalDayNames[7] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
 
-void MultipusherDock::rebuildIntervalRows() {
-    if (!intervalSlotsLayout_ || !ctx()) return;
+// One fixed interval row: start/end time + weekday checkboxes. No add/remove.
+void MultipusherDock::buildIntervalRow(QHBoxLayout* row) {
+    row->addWidget(new QLabel("Interval:"));
 
-    loadingIntervals_ = true;
+    intervalStart_ = new QTimeEdit();
+    intervalStart_->setDisplayFormat("HH:mm");
+    intervalStart_->setTime(QTime(9, 0));
+    row->addWidget(intervalStart_);
 
-    // Tear down existing rows.
-    for (auto& r : intervalRows_)
-        if (r.rowWidget) r.rowWidget->deleteLater();
-    intervalRows_.clear();
-    while (QLayoutItem* item = intervalSlotsLayout_->takeAt(0)) {
-        if (item->widget()) item->widget()->deleteLater();
-        delete item;
-    }
+    row->addWidget(new QLabel("to"));
 
-    for (auto& slot : ctx()->config.Get().intervals)
-        addIntervalRow(slot);
+    intervalEnd_ = new QTimeEdit();
+    intervalEnd_->setDisplayFormat("HH:mm");
+    intervalEnd_->setTime(QTime(18, 0));
+    row->addWidget(intervalEnd_);
 
-    loadingIntervals_ = false;
+    row->addSpacing(6);
 
-    updateButtons();
-}
-
-void MultipusherDock::addIntervalRow(const IntervalSlot& slot) {
-    auto* rowWidget = new QWidget(intervalSlotsWidget_);
-    auto* rowLayout = new QHBoxLayout(rowWidget);
-    rowLayout->setContentsMargins(0, 0, 0, 0);
-    rowLayout->setSpacing(4);
-
-    auto* start = new QTimeEdit(rowWidget);
-    start->setDisplayFormat("HH:mm");
-    start->setTime(QTime(0, 0).addSecs(slot.startMinutes * 60));
-    rowLayout->addWidget(start);
-
-    rowLayout->addWidget(new QLabel("to", rowWidget));
-
-    auto* end = new QTimeEdit(rowWidget);
-    end->setDisplayFormat("HH:mm");
-    end->setTime(QTime(0, 0).addSecs(slot.endMinutes * 60));
-    rowLayout->addWidget(end);
-
-    std::array<QCheckBox*, 7> dayChecks{};
     for (int i = 0; i < 7; ++i) {
-        auto* check = new QCheckBox(kIntervalDayNames[i], rowWidget);
-        check->setChecked(slot.days[i]);
-        rowLayout->addWidget(check);
-        dayChecks[i] = check;
+        auto* check = new QCheckBox(kIntervalDayNames[i]);
+        check->setChecked(i < 5); // Mon-Fri default
+        row->addWidget(check);
+        intervalDays_[i] = check;
         connect(check, &QCheckBox::toggled, this, [this]() { onIntervalEdited(); });
     }
 
-    auto* remove = new QPushButton("X", rowWidget);
-    remove->setFixedWidth(24);
-    remove->setToolTip("Remove");
-    rowLayout->addWidget(remove);
-    rowLayout->addStretch(1);
+    row->addStretch();
 
-    intervalSlotsLayout_->addWidget(rowWidget);
-    intervalRows_.push_back({rowWidget, start, end, dayChecks, remove});
+    intervalButton_ = new QPushButton("Start Interval Pub");
+    intervalButton_->setMinimumWidth(150);
+    intervalButton_->setStyleSheet(
+        "QPushButton { font-weight:bold; padding:4px 12px; }"
+        "QPushButton:hover { background:#38a; color:white; }");
+    row->addWidget(intervalButton_);
 
-    connect(start, &QTimeEdit::userTimeChanged, this, [this]() { onIntervalEdited(); });
-    connect(end, &QTimeEdit::userTimeChanged, this, [this]() { onIntervalEdited(); });
-    connect(remove, &QPushButton::clicked, this, [this, rowWidget]() {
-        for (size_t i = 0; i < intervalRows_.size(); ++i) {
-            if (intervalRows_[i].rowWidget == rowWidget) {
-                removeIntervalRow(i);
-                break;
-            }
-        }
-    });
+    connect(intervalStart_, &QTimeEdit::userTimeChanged, this, [this]() { onIntervalEdited(); });
+    connect(intervalEnd_, &QTimeEdit::userTimeChanged, this, [this]() { onIntervalEdited(); });
 }
 
-void MultipusherDock::removeIntervalRow(size_t idx) {
-    if (idx >= intervalRows_.size()) return;
+void MultipusherDock::loadIntervalToUI() {
+    if (!intervalStart_ || !intervalEnd_ || !ctx()) return;
 
-    intervalRows_[idx].rowWidget->deleteLater();
-    intervalRows_.erase(intervalRows_.begin() + static_cast<std::ptrdiff_t>(idx));
-    onIntervalEdited();
+    loadingIntervals_ = true;
+
+    auto& ivs = ctx()->config.GetMutable().intervals;
+    if (ivs.empty()) {
+        // Seed a sensible default so the fixed row is usable.
+        IntervalSlot s;
+        s.startMinutes = 9 * 60;
+        s.endMinutes   = 18 * 60;
+        for (int d = 0; d < 5; ++d) s.days[d] = true; // Mon-Fri
+        ivs.push_back(s);
+    }
+
+    const IntervalSlot& s = ivs.front();
+    intervalStart_->setTime(QTime(0, 0).addSecs(s.startMinutes * 60));
+    intervalEnd_->setTime(QTime(0, 0).addSecs(s.endMinutes * 60));
+    for (int d = 0; d < 7; ++d)
+        intervalDays_[d]->setChecked(s.days[d]);
+
+    loadingIntervals_ = false;
 }
 
 void MultipusherDock::onIntervalEdited() {
-    if (loadingIntervals_ || !ctx()) return;
+    if (loadingIntervals_ || !ctx() || !intervalStart_ || !intervalEnd_) return;
 
-    auto& cfg = ctx()->config.GetMutable();
-    cfg.intervals.clear();
-    for (auto& r : intervalRows_) {
-        IntervalSlot s;
-        s.startMinutes = QTime(0, 0).secsTo(r.start->time()) / 60;
-        s.endMinutes   = QTime(0, 0).secsTo(r.end->time()) / 60;
-        for (int d = 0; d < 7; ++d) s.days[d] = r.days[d]->isChecked();
-        cfg.intervals.push_back(s);
-    }
+    IntervalSlot s;
+    s.startMinutes = QTime(0, 0).secsTo(intervalStart_->time()) / 60;
+    s.endMinutes   = QTime(0, 0).secsTo(intervalEnd_->time()) / 60;
+    for (int d = 0; d < 7; ++d) s.days[d] = intervalDays_[d]->isChecked();
+
+    auto& ivs = ctx()->config.GetMutable().intervals;
+    ivs.clear();
+    ivs.push_back(s);
     ctx()->config.Save(ctx()->config.Path());
 }
 
@@ -599,7 +554,9 @@ void MultipusherDock::updateButtons() {
 
     // The interval editor is locked while interval mode is running.
     bool editEnabled = !intervalMode_;
-    if (intervalSlotsWidget_) intervalSlotsWidget_->setEnabled(editEnabled);
-    if (addIntervalBtn_) addIntervalBtn_->setEnabled(editEnabled);
+    if (intervalStart_) intervalStart_->setEnabled(editEnabled);
+    if (intervalEnd_) intervalEnd_->setEnabled(editEnabled);
+    for (auto* c : intervalDays_)
+        if (c) c->setEnabled(editEnabled);
     if (qualitySpin_) qualitySpin_->setEnabled(!pub && !intervalMode_);
 }
