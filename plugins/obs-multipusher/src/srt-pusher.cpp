@@ -39,8 +39,23 @@ struct SrtPusher {
     std::string name;        // output name (e.g. "mp_economic")
     bool logged_v = false;   // logged first video packet bytes
     bool logged_a = false;   // logged first audio packet bytes
-    int  werr = 0;           // per-output write-error count
+    int  werr = 0;           // per-output write-error count (for logging)
+
+    // Reconnect state. A dead SRT link fails every write, so a run of
+    // consecutive failures is a reliable "connection is broken" signal; we
+    // then hand off to libobs' reconnect machinery (enabled by the
+    // OutputManager via obs_output_set_reconnect_settings) instead of sitting
+    // on a permanently broken socket.
+    int  consecutive_werr    = 0;
+    bool reconnect_signaled  = false;
+    bool started_once        = false;  // survived at least one successful start
 };
+
+// Consecutive write failures before tearing the SRT socket down and letting
+// libobs reconnect the output. Small enough to recover within well under a
+// second at 30fps, large enough that one transient packet error doesn't
+// trigger a reconnect.
+#define SRT_PUSHER_WERR_THRESHOLD 10
 
 // ── FFmpeg log bridge ─────────────────────────────────────────────
 // Route libavformat / libsrt diagnostics into the OBS log so connection
@@ -86,7 +101,7 @@ static void srt_pusher_destroy(void* data) {
     MP_LOG(LOG_INFO, "[obs-multipusher] srt_pusher destroyed");
 }
 
-static bool srt_pusher_start(void* data) {
+static bool srt_pusher_start_impl(void* data) {
     auto* sp = static_cast<SrtPusher*>(data);
     obs_output_t* output = sp->output;
 
@@ -250,12 +265,29 @@ static bool srt_pusher_start(void* data) {
     sp->sent_audio = false;
     sp->sent_video = false;
     sp->start_ts = -1;
+    sp->consecutive_werr = 0;
+    sp->reconnect_signaled = false;
 
     obs_output_begin_data_capture(output, 0);
     obs_data_release(settings);
 
+    sp->started_once = true;
     MP_LOG(LOG_INFO, "[obs-multipusher] srt_pusher: started successfully");
     return true;
+}
+
+// Entry point libobs calls (both for the initial obs_output_start and for every
+// reconnect attempt). If a *reconnect* attempt fails - the SRT server is still
+// unreachable - signal DISCONNECTED again so libobs schedules the next attempt
+// on its backoff curve (output_reconnect() only re-arms while the output is
+// "reconnecting"). The very first start is left alone so the OutputManager can
+// still do its software-encoder fallback when obs_output_start() returns false.
+static bool srt_pusher_start(void* data) {
+    auto* sp = static_cast<SrtPusher*>(data);
+    bool ok = srt_pusher_start_impl(data);
+    if (!ok && sp->started_once)
+        obs_output_signal_stop(sp->output, OBS_OUTPUT_DISCONNECTED);
+    return ok;
 }
 
 static void srt_pusher_stop(void* data, uint64_t) {
@@ -368,6 +400,23 @@ static void srt_pusher_encoded_packet(void* data, struct encoder_packet* packet)
                    sp->name.c_str(), packet->type == OBS_ENCODER_VIDEO ? "video" : "audio", errbuf);
             sp->werr++;
         }
+
+        // A broken SRT socket rejects every packet, so a run of consecutive
+        // failures means the connection is gone. Stop the output with
+        // DISCONNECTED and let libobs tear it down and re-run
+        // srt_pusher_start() on its reconnect schedule (the OutputManager
+        // enables that via obs_output_set_reconnect_settings). Without this the
+        // output stayed "active" on a dead socket and the stream never came
+        // back until the next scheduled interval.
+        if (++sp->consecutive_werr >= SRT_PUSHER_WERR_THRESHOLD && !sp->reconnect_signaled) {
+            sp->reconnect_signaled = true;
+            MP_LOG(LOG_WARNING,
+                   "[obs-multipusher] srt_pusher[%s]: %d consecutive write errors - reconnecting",
+                   sp->name.c_str(), sp->consecutive_werr);
+            obs_output_signal_stop(sp->output, OBS_OUTPUT_DISCONNECTED);
+        }
+    } else {
+        sp->consecutive_werr = 0;
     }
 }
 

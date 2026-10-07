@@ -457,6 +457,16 @@ void OutputManager::createOutputs() {
             signalHandlers_.push_back(handler);
         }
 
+        // Enable libobs' reconnect machinery. When the SRT link dies,
+        // srt_pusher stops the output with OBS_OUTPUT_DISCONNECTED; libobs then
+        // tears it down and re-runs the output's start callback with
+        // exponential backoff (see output_reconnect()/reconnect_thread() in
+        // obs-output.c). The attempt count is deliberately huge so a 24/7
+        // stream keeps retrying; the delay starts at reconnectMinSeconds and
+        // grows by 1.5x per attempt (capped at 15 minutes by libobs).
+        obs_output_set_reconnect_settings(slot.output, 100000,
+                                          std::max(1, config_.publish.reconnectMinSeconds));
+
         MP_LOG(LOG_INFO, "[obs-multipusher] created SRT output: %s → %dx%d → %s",
                slot.level.c_str(), width, height,
                Utils::MaskTxSecret(slot.srtURL).c_str());
