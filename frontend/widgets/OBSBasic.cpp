@@ -852,6 +852,10 @@ bool OBSBasic::InitBasicConfigDefaults()
 	config_set_default_bool(activeConfiguration, "Output", "DelayPreserve", true);
 
 	config_set_default_bool(activeConfiguration, "Output", "Reconnect", true);
+	// MMX receiver-measured RTP loss restart policy.
+	config_set_default_bool(App()->GetAppConfig(), "General", "RtpLossRestart", true);
+	config_set_default_double(App()->GetAppConfig(), "General", "RtpLossRestartThresholdPct", 1.5);
+	config_set_default_uint(App()->GetAppConfig(), "General", "RtpLossRestartDurationSec", 30);
 	config_set_default_uint(activeConfiguration, "Output", "WhipDisconnectGraceSec", 10);
 	config_set_default_uint(activeConfiguration, "Output", "WhipReconnectBackoffSec", 3);
 	config_set_default_uint(activeConfiguration, "Output", "RetryDelay", 2);

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 
+#include <util/config-file.h>
 #include <util/platform.h>
 
 #include <utility/MultitrackVideoError.hpp>
@@ -642,11 +643,31 @@ void BasicOutputHandler::StartDegrade(obs_service_t *service, obs_output_t *outp
 	degradeActive = true;
 	degradeRestartQueued.store(false);
 
-	blog(LOG_INFO, "[degrade] executor starting for %s (%d layer(s), ws=%s)", protocol, degradeFullLayers,
-	     ws_url.c_str());
+	// Loss-driven restart policy, from Settings > Advanced ("RTP丢包重启");
+	// defaults are registered in OBSBasic::OBSInit, so config_get_* returns
+	// them when unset. mmx pushes receiver-measured loss (LOSS_STATS) and
+	// the executor restarts the output once it stays above the threshold
+	// for the configured duration.
+	{
+		config_t *cfg = App()->GetAppConfig();
+		degradeLossRestartEnabled = config_get_bool(cfg, "General", "RtpLossRestart");
+		degradeLossRestartThresholdPct =
+			config_get_double(cfg, "General", "RtpLossRestartThresholdPct");
+		degradeLossRestartDurationMs =
+			(uint64_t)config_get_int(cfg, "General", "RtpLossRestartDurationSec") * 1000ULL;
+	}
+	degradeLossHighSinceNs = 0;
+
+	blog(LOG_INFO, "[degrade] executor starting for %s (%d layer(s), ws=%s, loss_restart=%s %.2f%%/%llums)",
+	     protocol, degradeFullLayers, ws_url.c_str(), degradeLossRestartEnabled ? "on" : "off",
+	     degradeLossRestartThresholdPct, (unsigned long long)degradeLossRestartDurationMs);
 
 	degradeClient = std::make_unique<DegradeClient>();
-	degradeClient->Start(ws_url, [this](int layers, int pct) { ApplyDegradeTarget(layers, pct); });
+	degradeClient->Start(ws_url, [this](int layers, int pct) { ApplyDegradeTarget(layers, pct); },
+			     [this](const DegradeClient::LossStats &s) {
+				     ApplyDegradeLoss(s.proto.c_str(), s.unrecovered_pct, s.raw_pct,
+						      s.bitrate_mbps, s.rtt_ms);
+			     });
 }
 
 void BasicOutputHandler::StopDegrade()
@@ -707,21 +728,76 @@ void BasicOutputHandler::ApplyDegradeTarget(int layers, int bitratePercent)
 		// and run it on the Qt main thread - see PerformDegradeRestart.
 		blog(LOG_INFO, "[degrade] layer change %d -> %d requested, queuing restart", degradeCurLayers, want);
 		degradeTargetLayers = want;
-
-		if (!degradeRestartQueued.exchange(true)) {
-			OBSBasic *m = main;
-			QMetaObject::invokeMethod(
-				m,
-				[this, m]() {
-					// The handler may have been torn down (profile
-					// switch / app exit) before this ran.
-					if (!m || m->outputHandler.get() != this)
-						return;
-					PerformDegradeRestart();
-				},
-				Qt::QueuedConnection);
-		}
+		QueueDegradeRestart();
 	}
+}
+
+// Queues one restart of the streaming output on the Qt main thread,
+// collapsing concurrent requests (TARGET_STATE layer change and/or a
+// loss-driven reconnect) into a single stop+start. Caller must hold
+// degradeMutex.
+void BasicOutputHandler::QueueDegradeRestart()
+{
+	if (degradeRestartQueued.exchange(true))
+		return;
+
+	OBSBasic *m = main;
+	QMetaObject::invokeMethod(
+		m,
+		[this, m]() {
+			// The handler may have been torn down (profile switch /
+			// app exit) before this ran.
+			if (!m || m->outputHandler.get() != this)
+				return;
+			PerformDegradeRestart();
+		},
+		Qt::QueuedConnection);
+}
+
+// Loss-driven restart (LOSS_STATS): mmx reports its receiver-measured
+// unrecovered drop rate every sample. When it stays above the configured
+// threshold for the configured duration, restart the output so the
+// publisher reconnects - the same action the old mmx-side fast reconnect
+// took (close the connection), now decided here from mmx's numbers.
+void BasicOutputHandler::ApplyDegradeLoss(const char *proto, double unrecoveredPct, double rawPct,
+					  double bitrateMbps, double rttMs)
+{
+	std::lock_guard<std::mutex> lk(degradeMutex);
+
+	if (!degradeActive || !degradeLossRestartEnabled)
+		return;
+
+	const uint64_t now = os_gettime_ns();
+
+	// At/below the threshold (including the deadband): the run is broken.
+	if (unrecoveredPct <= degradeLossRestartThresholdPct) {
+		degradeLossHighSinceNs = 0;
+		return;
+	}
+
+	// Above the threshold: start the run, then restart once it has lasted
+	// at least degradeLossRestartDurationMs.
+	if (degradeLossHighSinceNs == 0) {
+		degradeLossHighSinceNs = now;
+		blog(LOG_INFO, "[degrade] LOSS_STATS %s unrecovered=%.2f%% > %.2f%% - restart timer started",
+		     proto ? proto : "?", unrecoveredPct, degradeLossRestartThresholdPct);
+		return;
+	}
+
+	if (now - degradeLossHighSinceNs < degradeLossRestartDurationMs * 1000000ULL)
+		return;
+
+	blog(LOG_WARNING,
+	     "[degrade] LOSS_STATS %s unrecovered=%.2f%% (raw=%.2f%%, %.2f Mbps, rtt %.1fms) above %.2f%% for %llums - restarting",
+	     proto ? proto : "?", unrecoveredPct, rawPct, bitrateMbps, rttMs, degradeLossRestartThresholdPct,
+	     (unsigned long long)((now - degradeLossHighSinceNs) / 1000000ULL));
+
+	// Re-arm so the next restart needs another full duration.
+	degradeLossHighSinceNs = now;
+
+	// Same restart machinery as a layer change, at the current layer count.
+	degradeTargetLayers = degradeCurLayers;
+	QueueDegradeRestart();
 }
 
 void BasicOutputHandler::PerformDegradeRestart()
