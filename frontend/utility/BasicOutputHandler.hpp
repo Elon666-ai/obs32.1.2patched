@@ -7,6 +7,7 @@
 #include <util/dstr.hpp>
 
 #include <atomic>
+#include <cstdint>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -94,6 +95,18 @@ struct BasicOutputHandler {
 	// back-to-back TARGET_STATE messages into one queued restart.
 	std::atomic<bool> degradeRestartQueued{false};
 
+	// Loss-driven restart (LOSS_STATS). mmx no longer force-closes the
+	// publish connection to trigger a reconnect; instead it reports its
+	// receiver-measured unrecovered drop rate and the executor restarts
+	// the output (same machinery as a layer change) once that rate stays
+	// above degradeLossRestartThresholdPct for degradeLossRestartDurationMs.
+	// Configured in Settings > Advanced ("RTP丢包重启"); read in
+	// StartDegrade from the app config.
+	bool degradeLossRestartEnabled = false;
+	double degradeLossRestartThresholdPct = 1.5;
+	uint64_t degradeLossRestartDurationMs = 30000;
+	uint64_t degradeLossHighSinceNs = 0; // 0 = loss currently at/below threshold
+
 	virtual std::shared_future<void> SetupStreaming(obs_service_t *service,
 							SetupStreamingContinuation_t continuation) = 0;
 	virtual bool StartStreaming(obs_service_t *service) = 0;
@@ -141,7 +154,9 @@ protected:
 
 private:
 	void ApplyDegradeTarget(int layers, int bitratePercent);
+	void ApplyDegradeLoss(const char *proto, double unrecoveredPct, double rawPct, double bitrateMbps, double rttMs);
 	void ApplyDegradeBitrate(int bitratePercent);
+	void QueueDegradeRestart();
 	void PerformDegradeRestart();
 	void RebindDegradeLayers(obs_output_t *output, int layers);
 };

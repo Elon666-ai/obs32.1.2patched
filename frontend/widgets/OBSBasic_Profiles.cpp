@@ -36,6 +36,18 @@ constexpr std::string_view OBSProfileSettingsFile = "basic.ini";
 
 extern bool restart;
 
+// Per-encoder settings files ("streamEncoder_<id>.json" /
+// "recordEncoder_<id>.json") - see OBSBasicSettings/AdvancedOutput. They must
+// travel with the profile on import/export alongside the legacy shared files.
+static bool IsPerEncoderSettingsFile(const std::string &name)
+{
+	constexpr std::string_view suffix = ".json";
+	if (name.size() <= suffix.size() || name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0)
+		return false;
+
+	return name.rfind("streamEncoder_", 0) == 0 || name.rfind("recordEncoder_", 0) == 0;
+}
+
 extern void DestroyPanelCookieManager();
 extern void DuplicateCurrentCookieProfile(ConfigFile &config);
 extern void CheckExistingCookieId();
@@ -610,6 +622,23 @@ void OBSBasic::on_actionImportProfile_triggered()
 			}
 		}
 
+		try {
+			for (const auto &entry : std::filesystem::directory_iterator(sourcePath)) {
+				if (!entry.is_regular_file())
+					continue;
+
+				const std::string fileName = entry.path().filename().string();
+				if (!IsPerEncoderSettingsFile(fileName))
+					continue;
+
+				std::filesystem::copy(entry.path(), destinationPath / std::filesystem::u8path(fileName));
+			}
+		} catch (const std::filesystem::filesystem_error &error) {
+			blog(LOG_WARNING, "Failed to copy per-encoder settings for profile '%s':\n%s",
+			     directoryName.c_str(), error.what());
+			return;
+		}
+
 		RefreshProfiles(true);
 	}
 }
@@ -653,6 +682,24 @@ void OBSBasic::on_actionExportProfile_triggered()
 				     currentProfile.name.c_str(), error.what());
 				return;
 			}
+		}
+
+		try {
+			for (const auto &entry : std::filesystem::directory_iterator(sourcePath)) {
+				if (!entry.is_regular_file())
+					continue;
+
+				const std::string fileName = entry.path().filename().string();
+				if (!IsPerEncoderSettingsFile(fileName))
+					continue;
+
+				std::filesystem::copy(entry.path(),
+						      destinationPath / std::filesystem::u8path(fileName), copyOptions);
+			}
+		} catch (const std::filesystem::filesystem_error &error) {
+			blog(LOG_WARNING, "Failed to copy per-encoder settings for profile '%s'\n%s",
+			     currentProfile.name.c_str(), error.what());
+			return;
 		}
 	}
 }

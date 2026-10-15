@@ -24,6 +24,12 @@
 // (the WebRTC HTTP origin, :8889 by default - override with
 // WHIP_DEGRADE_WS_PORT, or the whole URL with WHIP_DEGRADE_WS_URL).
 //
+// mmx also pushes LOSS_STATS ({proto, unrecovered_pct, raw_pct, ...}) every
+// loss-reaction sample - the receiver-measured loss the sender cannot see.
+// The owner decides what to do with it (see
+// BasicOutputHandler::ApplyDegradeLoss: reconnect when the unrecovered rate
+// crosses a threshold).
+//
 // This class only owns the socket, the reconnect/backoff loop and JSON
 // parsing. What to *do* with a target (live bitrate change, restart with a
 // reduced layer count) is decided by the callback the owner supplies - see
@@ -40,6 +46,22 @@ public:
 	// the worker thread; must not block indefinitely.
 	using TargetCallback = std::function<void(int layers, int bitrate_percent)>;
 
+	// LossStats is one receiver-measured loss sample pushed by mmx
+	// (message type "LOSS_STATS", see docs/obs-mmx-degrade-protocol.md).
+	// The publisher (sender) cannot measure the post-ARQ unrecovered rate
+	// itself - that is defined by the receiver's TSBPD play deadline - so
+	// mmx, the receiver, reports it here for the executor to base its own
+	// reconnect decision on.
+	struct LossStats {
+		std::string proto;                // "srt" | "whip"
+		double unrecovered_pct = 0.0;     // post-ARQ (visible) loss, percent
+		double raw_pct = 0.0;             // pre-retransmit loss, percent
+		double bitrate_mbps = 0.0;
+		double rtt_ms = 0.0;
+	};
+	// Called from the worker thread; must not block indefinitely.
+	using LossCallback = std::function<void(const LossStats &)>;
+
 	DegradeClient();
 	~DegradeClient();
 
@@ -47,9 +69,9 @@ public:
 	DegradeClient &operator=(const DegradeClient &) = delete;
 
 	// Starts (or re-targets) the client at ws_url. Assumes any previous
-	// session was stopped first; ownership of cb is taken. No-op if
-	// already connected to the same endpoint.
-	void Start(const std::string &ws_url, TargetCallback cb);
+	// session was stopped first; ownership of cb/loss_cb is taken. No-op
+	// if already connected to the same endpoint.
+	void Start(const std::string &ws_url, TargetCallback cb, LossCallback loss_cb = nullptr);
 	void Stop();
 
 	// Derives the degrade WS URL for service (WHIP or SRT). Empty if the
@@ -62,12 +84,14 @@ private:
 	bool ShouldReconnectLocked() const;
 	void HandleMessage(const std::string &payload);
 	void DispatchTarget(int layers, int bitrate_percent);
+	void DispatchLoss(const LossStats &s);
 
 	std::unique_ptr<client_t> client;
 	conn_ptr conn;
 
 	std::string ws_url;
 	TargetCallback callback;
+	LossCallback loss_callback;
 
 	mutable std::mutex mtx;
 
