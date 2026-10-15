@@ -200,12 +200,14 @@ void OBSBasicSettings::LoadStream1Settings()
 	}
 	if (!is_srt) {
 		srtServiceEndpoint = load_persisted("SrtServiceEndpoint");
-		// "SRT" starts life as a copy of the Custom endpoint until the
-		// user gives it one of its own; once persisted it stays
+		// "SRT" starts life as a copy of the Custom endpoint/key until
+		// the user gives it its own; once persisted it stays
 		// independent (see SwapStreamDestinationField).
 		if (srtServiceEndpoint.isEmpty())
 			srtServiceEndpoint = customServiceEndpoint;
 		srtServiceKey = load_persisted("SrtServiceKey");
+		if (srtServiceKey.isEmpty())
+			srtServiceKey = customServiceKey;
 	}
 	if (!is_whip) {
 		whipServiceEndpoint = load_persisted("WhipServiceEndpoint");
@@ -889,7 +891,7 @@ void OBSBasicSettings::LoadServices(bool showAll)
 	if (showAll)
 		names.sort(Qt::CaseInsensitive);
 
-	ui->service->addItem(QTStr("SRT"), QVariant((int)ListOpt::SRT));
+	ui->service->addItem(QTStr("Basic.Settings.Stream.Service.SRT"), QVariant((int)ListOpt::SRT));
 	if (obs_is_output_protocol_registered("WHIP"))
 		ui->service->addItem(QTStr("WHIP"), QVariant((int)ListOpt::WHIP));
 	ui->service->addItem(QTStr("Basic.AutoConfig.StreamPage.Service.Custom"), QVariant((int)ListOpt::Custom));
@@ -1138,6 +1140,14 @@ void OBSBasicSettings::ServiceChanged(bool resetFields)
 
 QString OBSBasicSettings::FindProtocol()
 {
+	// The dedicated "SRT" entry is an explicit choice, so it must not fall
+	// back to RTMP/Custom just because the endpoint box is empty or doesn't
+	// happen to start with "srt://" yet (e.g. while the user is still typing
+	// it) - that made SRT-specific UI (multi-track, network options) revert
+	// to the Custom layout as soon as the address was cleared.
+	if (IsSRT())
+		return QString("SRT");
+
 	if (IsCustomService()) {
 		if (ui->customServer->text().isEmpty())
 			return QString("RTMP");
@@ -1995,6 +2005,16 @@ bool OBSBasicSettings::ServiceSupportsCodecCheck()
 {
 	if (loading)
 		return false;
+
+	// Switching the stream service must never touch the encoder/codec
+	// configuration. For the custom-family services (Custom/SRT/WHIP) the
+	// user chooses the codec in Output settings independently of which
+	// stream service is selected, so don't raise the compatibility dialog,
+	// don't force an encoder swap, and don't re-filter the encoder lists
+	// here. Previously a WHIP -> Custom switch rewrote the audio codec to
+	// AAC through this path.
+	if (IsCustomService() || IsWHIP())
+		return true;
 
 	bool vcodec_compat = ServiceAndVCodecCompatible();
 	bool acodec_compat = ServiceAndACodecCompatible();
