@@ -39,6 +39,7 @@ enum class ListOpt : int {
 	ShowAll = 1,
 	Custom,
 	WHIP,
+	SRT,
 };
 
 enum class Section : int {
@@ -48,7 +49,13 @@ enum class Section : int {
 
 bool OBSBasicSettings::IsCustomService() const
 {
-	return ui->service->currentData().toInt() == (int)ListOpt::Custom;
+	const int option = ui->service->currentData().toInt();
+	return option == (int)ListOpt::Custom || option == (int)ListOpt::SRT;
+}
+
+bool OBSBasicSettings::IsSRT() const
+{
+	return ui->service->currentData().toInt() == (int)ListOpt::SRT;
 }
 
 inline bool OBSBasicSettings::IsWHIP() const
@@ -146,6 +153,8 @@ void OBSBasicSettings::LoadStream1Settings()
 	const char *bearer_token = obs_data_get_string(settings, "bearer_token");
 	const char *backup_server = obs_data_get_string(settings, "backup_server");
 
+	const bool is_srt = is_rtmp_custom && strcmp(obs_data_get_string(settings, "service"), "SRT") == 0;
+
 	if (is_rtmp_custom || is_whip)
 		ui->customServer->setText(server);
 
@@ -153,7 +162,11 @@ void OBSBasicSettings::LoadStream1Settings()
 	// is actually loaded from disk, so SwapStreamDestinationField()
 	// doesn't blank out the others on the first switch this session -
 	// see its declaration in the header for why these are kept separate.
-	if (is_rtmp_custom) {
+	if (is_srt) {
+		srtServiceEndpoint = QT_UTF8(server);
+		srtServiceKey = QT_UTF8(key);
+		lastStreamDestinationField = StreamDestinationField::SRT;
+	} else if (is_rtmp_custom) {
 		customServiceEndpoint = QT_UTF8(server);
 		customServiceKey = QT_UTF8(key);
 		lastStreamDestinationField = StreamDestinationField::Custom;
@@ -181,9 +194,18 @@ void OBSBasicSettings::LoadStream1Settings()
 		const char *value = config_get_string(main->Config(), "Stream1", key_name);
 		return value ? QT_UTF8(value) : QString();
 	};
-	if (!is_rtmp_custom) {
+	if (!is_rtmp_custom || is_srt) {
 		customServiceEndpoint = load_persisted("CustomServiceEndpoint");
 		customServiceKey = load_persisted("CustomServiceKey");
+	}
+	if (!is_srt) {
+		srtServiceEndpoint = load_persisted("SrtServiceEndpoint");
+		// "SRT" starts life as a copy of the Custom endpoint until the
+		// user gives it one of its own; once persisted it stays
+		// independent (see SwapStreamDestinationField).
+		if (srtServiceEndpoint.isEmpty())
+			srtServiceEndpoint = customServiceEndpoint;
+		srtServiceKey = load_persisted("SrtServiceKey");
 	}
 	if (!is_whip) {
 		whipServiceEndpoint = load_persisted("WhipServiceEndpoint");
@@ -194,8 +216,9 @@ void OBSBasicSettings::LoadStream1Settings()
 	}
 
 	if (is_rtmp_custom) {
-		ui->service->setCurrentIndex(0);
-		lastServiceIdx = 0;
+		int service_idx = ui->service->findData(QVariant((int)(is_srt ? ListOpt::SRT : ListOpt::Custom)));
+		ui->service->setCurrentIndex(service_idx >= 0 ? service_idx : 0);
+		lastServiceIdx = ui->service->currentIndex();
 		lastCustomServer = ui->customServer->text();
 
 		bool use_auth = obs_data_get_bool(settings, "use_auth");
@@ -341,10 +364,11 @@ void OBSBasicSettings::SwapMultiTrack(const char *protocol)
 void OBSBasicSettings::SaveStream1Settings()
 {
 	bool customServer = IsCustomService();
+	bool srt = IsSRT();
 	bool whip = IsWHIP();
 	const char *service_id = "rtmp_common";
 
-	if (customServer) {
+	if (srt || customServer) {
 		service_id = "rtmp_custom";
 	} else if (whip) {
 		service_id = "whip_custom";
@@ -355,7 +379,7 @@ void OBSBasicSettings::SaveStream1Settings()
 
 	OBSDataAutoRelease settings = obs_data_create();
 
-	if (!customServer && !whip) {
+	if (!customServer && !srt && !whip) {
 		obs_data_set_string(settings, "service", QT_TO_UTF8(ui->service->currentText()));
 		obs_data_set_string(settings, "protocol", QT_TO_UTF8(protocol));
 		if (ui->server->currentData() == CustomServerUUID()) {
@@ -372,6 +396,8 @@ void OBSBasicSettings::SaveStream1Settings()
 			obs_data_set_string(settings, "username", QT_TO_UTF8(ui->authUsername->text()));
 			obs_data_set_string(settings, "password", QT_TO_UTF8(ui->authPw->text()));
 		}
+		if (srt)
+			obs_data_set_string(settings, "service", "SRT");
 	}
 
 	if (!!auth && strcmp(auth->service(), "Twitch") == 0) {
@@ -416,7 +442,10 @@ void OBSBasicSettings::SaveStream1Settings()
 	// so LoadStream1Settings() can restore whichever ones aren't in
 	// service.json on the next load - see its matching load_persisted
 	// lambda.
-	if (customServer) {
+	if (srt) {
+		srtServiceEndpoint = ui->customServer->text();
+		srtServiceKey = ui->key->text();
+	} else if (customServer) {
 		customServiceEndpoint = ui->customServer->text();
 		customServiceKey = ui->key->text();
 	} else if (whip) {
@@ -427,6 +456,8 @@ void OBSBasicSettings::SaveStream1Settings()
 	}
 	config_set_string(main->Config(), "Stream1", "CustomServiceEndpoint", QT_TO_UTF8(customServiceEndpoint));
 	config_set_string(main->Config(), "Stream1", "CustomServiceKey", QT_TO_UTF8(customServiceKey));
+	config_set_string(main->Config(), "Stream1", "SrtServiceEndpoint", QT_TO_UTF8(srtServiceEndpoint));
+	config_set_string(main->Config(), "Stream1", "SrtServiceKey", QT_TO_UTF8(srtServiceKey));
 	config_set_string(main->Config(), "Stream1", "WhipServiceEndpoint", QT_TO_UTF8(whipServiceEndpoint));
 	config_set_string(main->Config(), "Stream1", "WhipServiceKey", QT_TO_UTF8(whipServiceKey));
 	config_set_string(main->Config(), "Stream1", "CommonServiceKey", QT_TO_UTF8(commonServiceKey));
@@ -858,19 +889,18 @@ void OBSBasicSettings::LoadServices(bool showAll)
 	if (showAll)
 		names.sort(Qt::CaseInsensitive);
 
+	ui->service->addItem(QTStr("SRT"), QVariant((int)ListOpt::SRT));
+	if (obs_is_output_protocol_registered("WHIP"))
+		ui->service->addItem(QTStr("WHIP"), QVariant((int)ListOpt::WHIP));
+	ui->service->addItem(QTStr("Basic.AutoConfig.StreamPage.Service.Custom"), QVariant((int)ListOpt::Custom));
+
 	for (QString &name : names)
 		ui->service->addItem(name);
-
-	if (obs_is_output_protocol_registered("WHIP")) {
-		ui->service->addItem(QTStr("WHIP"), QVariant((int)ListOpt::WHIP));
-	}
 
 	if (!showAll) {
 		ui->service->addItem(QTStr("Basic.AutoConfig.StreamPage.Service.ShowAll"),
 				     QVariant((int)ListOpt::ShowAll));
 	}
-
-	ui->service->insertItem(0, QTStr("Basic.AutoConfig.StreamPage.Service.Custom"), QVariant((int)ListOpt::Custom));
 
 	if (!lastService.isEmpty()) {
 		int idx = ui->service->findText(lastService);
@@ -955,6 +985,10 @@ void OBSBasicSettings::SwapStreamDestinationField()
 		customServiceEndpoint = ui->customServer->text();
 		customServiceKey = ui->key->text();
 		break;
+	case StreamDestinationField::SRT:
+		srtServiceEndpoint = ui->customServer->text();
+		srtServiceKey = ui->key->text();
+		break;
 	case StreamDestinationField::WHIP:
 		whipServiceEndpoint = ui->customServer->text();
 		whipServiceKey = ui->key->text();
@@ -964,7 +998,11 @@ void OBSBasicSettings::SwapStreamDestinationField()
 		break;
 	}
 
-	if (IsCustomService()) {
+	if (IsSRT()) {
+		ui->customServer->setText(srtServiceEndpoint);
+		ui->key->setText(srtServiceKey);
+		lastStreamDestinationField = StreamDestinationField::SRT;
+	} else if (IsCustomService()) {
 		ui->customServer->setText(customServiceEndpoint);
 		ui->key->setText(customServiceKey);
 		lastStreamDestinationField = StreamDestinationField::Custom;
@@ -1009,7 +1047,7 @@ void OBSBasicSettings::on_service_currentIndexChanged(int idx)
 
 	if (ServiceSupportsCodecCheck() && UpdateResFPSLimits()) {
 		lastServiceIdx = idx;
-		if (idx == 0)
+		if (IsCustomService())
 			lastCustomServer = ui->customServer->text();
 	}
 
@@ -2018,7 +2056,7 @@ bool OBSBasicSettings::ServiceSupportsCodecCheck()
 #undef WARNING_VAL
 
 	if (button == QMessageBox::No) {
-		if (lastServiceIdx == 0 && lastServiceIdx == ui->service->currentIndex())
+		if (IsCustomService() && lastServiceIdx == ui->service->currentIndex())
 			QMetaObject::invokeMethod(ui->customServer, "setText", Qt::QueuedConnection,
 						  Q_ARG(QString, lastCustomServer));
 		else

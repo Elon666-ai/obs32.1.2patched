@@ -171,7 +171,7 @@ DegradeClient::~DegradeClient()
 		worker.join();
 }
 
-void DegradeClient::Start(const std::string &url, TargetCallback cb)
+void DegradeClient::Start(const std::string &url, TargetCallback cb, LossCallback loss_cb)
 {
 	Stop();
 	if (url.empty())
@@ -181,6 +181,7 @@ void DegradeClient::Start(const std::string &url, TargetCallback cb)
 		std::lock_guard<std::mutex> lk(mtx);
 		ws_url = url;
 		callback = std::move(cb);
+		loss_callback = std::move(loss_cb);
 		conn.reset();
 		reconnect_backoff_ms = kReconnectBackoffMinMs;
 		next_reconnect_attempt_ns = 0;
@@ -216,6 +217,7 @@ void DegradeClient::Stop()
 
 	std::lock_guard<std::mutex> lk(mtx);
 	callback = nullptr;
+	loss_callback = nullptr;
 	ws_url.clear();
 	next_reconnect_attempt_ns = 0;
 	conn.reset();
@@ -358,6 +360,17 @@ void DegradeClient::HandleMessage(const std::string &payload)
 			return;
 		}
 
+		if (type == "LOSS_STATS") {
+			LossStats s;
+			s.proto = j.value("proto", std::string());
+			s.unrecovered_pct = j.value("unrecovered_pct", 0.0);
+			s.raw_pct = j.value("raw_pct", 0.0);
+			s.bitrate_mbps = j.value("bitrate_mbps", 0.0);
+			s.rtt_ms = j.value("rtt_ms", 0.0);
+			DispatchLoss(s);
+			return;
+		}
+
 		if (type == "ALERT") {
 			// Protocol §2/§R7: terminate-state notice, informational only.
 			std::string path = j.value("path", std::string());
@@ -379,4 +392,15 @@ void DegradeClient::DispatchTarget(int layers, int bitrate_percent)
 	}
 	if (cb)
 		cb(layers, bitrate_percent);
+}
+
+void DegradeClient::DispatchLoss(const LossStats &s)
+{
+	LossCallback cb;
+	{
+		std::lock_guard<std::mutex> lk(mtx);
+		cb = loss_callback;
+	}
+	if (cb)
+		cb(s);
 }

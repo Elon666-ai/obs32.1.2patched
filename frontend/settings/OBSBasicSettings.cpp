@@ -45,6 +45,7 @@
 #include <QStandardItemModel>
 
 #include <algorithm>
+#include <cctype>
 #include <sstream>
 
 #include "moc_OBSBasicSettings.cpp"
@@ -585,10 +586,6 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 	HookWidget(ui->reconnectMaxRetries,  SCROLL_CHANGED, ADV_CHANGED);
 	HookWidget(ui->whipDisconnectGraceSec,  SCROLL_CHANGED, ADV_CHANGED);
 	HookWidget(ui->whipReconnectBackoffSec, SCROLL_CHANGED, ADV_CHANGED);
-	HookWidget(ui->packetLossReconnectEnable,   CHECK_CHANGED,  ADV_CHANGED);
-	HookWidget(ui->packetLossStatPeriodSec,     SCROLL_CHANGED, ADV_CHANGED);
-	HookWidget(ui->packetLossWindowSec,         SCROLL_CHANGED, ADV_CHANGED);
-	HookWidget(ui->packetLossThresholdPercent,  DSCROLL_CHANGED, ADV_CHANGED);
 	HookWidget(ui->processPriority,      COMBO_CHANGED,  ADV_CHANGED);
 	HookWidget(ui->confirmOnExit,        CHECK_CHANGED,  ADV_CHANGED);
 	HookWidget(ui->bindToIP,             COMBO_CHANGED,  ADV_CHANGED);
@@ -2002,8 +1999,10 @@ OBSPropertiesView *OBSBasicSettings::CreateEncoderPropertyView(const char *encod
 
 		if (!jsonFilePath.empty()) {
 			obs_data_t *data = obs_data_create_from_json_file_safe(jsonFilePath.u8string().c_str(), "bak");
-			obs_data_apply(settings, data);
-			obs_data_release(data);
+			if (data) {
+				obs_data_apply(settings, data);
+				obs_data_release(data);
+			}
 		}
 	}
 
@@ -2018,12 +2017,40 @@ OBSPropertiesView *OBSBasicSettings::CreateEncoderPropertyView(const char *encod
 	return view;
 }
 
+// Per-encoder settings are stored in their own profile file (e.g.
+// "streamEncoder_ffmpeg_nvenc.json") so each video encoder keeps its own
+// properties instead of sharing one file - see on_advOutEncoder_currentIndexChanged
+// (writes the outgoing encoder's file before switching) and SaveOutputSettings
+// (writes the active one). Mirrors AdvancedOutput.cpp's helper so the runtime
+// reads back exactly the file this page last wrote.
+static std::string EncoderSettingsFile(const char *prefix, const QString &encoder)
+{
+	std::string name = prefix;
+	name += "_";
+	const std::string id = QT_TO_UTF8(encoder);
+	for (const char ch : id)
+		name += (std::isalnum((unsigned char)ch) || ch == '_' || ch == '-') ? ch : '_';
+	name += ".json";
+	return name;
+}
+
+static bool ProfileFileExists(const OBSProfile &profile, const std::string &path)
+{
+	return std::filesystem::exists(profile.path / std::filesystem::u8path(path));
+}
+
 void OBSBasicSettings::LoadAdvOutputStreamingEncoderProperties()
 {
 	const char *type = config_get_string(main->Config(), "AdvOut", "Encoder");
+	const std::string encoderFile = EncoderSettingsFile("streamEncoder", QT_UTF8(type));
+	// One-time fallback to the legacy shared file for the encoder that was
+	// active before this encoder got its own file; SaveOutputSettings()
+	// then migrates the value into the per-encoder file on the next Apply.
+	const char *settingsFile =
+		ProfileFileExists(main->GetCurrentProfile(), encoderFile) ? encoderFile.c_str() : "streamEncoder.json";
 
 	delete streamEncoderProps;
-	streamEncoderProps = CreateEncoderPropertyView(type, "streamEncoder.json");
+	streamEncoderProps = CreateEncoderPropertyView(type, settingsFile);
 	streamEncoderProps->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
 	ui->advOutEncoderLayout->addWidget(streamEncoderProps);
 
@@ -2031,6 +2058,17 @@ void OBSBasicSettings::LoadAdvOutputStreamingEncoderProperties()
 	connect(streamEncoderProps, &OBSPropertiesView::Changed, this, &OBSBasicSettings::AdvReplayBufferChanged);
 
 	curAdvStreamEncoder = type;
+
+	// Migrate the legacy shared file into this encoder's own file right
+	// away, so switching encoders within this dialog (which only consults
+	// the per-encoder file afterwards) keeps these properties instead of
+	// reverting to defaults.
+	if (strcmp(settingsFile, "streamEncoder.json") == 0 && streamEncoderProps) {
+		const std::filesystem::path perEncoderPath =
+			main->GetCurrentProfile().path / std::filesystem::u8path(encoderFile);
+		if (obs_data_t *s = streamEncoderProps->GetSettings())
+			obs_data_save_json_safe(s, perEncoderPath.u8string().c_str(), "tmp", "bak");
+	}
 
 	if (!SetComboByValue(ui->advOutEncoder, type)) {
 		uint32_t caps = obs_get_encoder_caps(type);
@@ -2126,8 +2164,12 @@ void OBSBasicSettings::LoadAdvOutputRecordingEncoderProperties()
 	delete recordEncoderProps;
 	recordEncoderProps = nullptr;
 
+	bool usedLegacyRecordFile = false;
 	if (astrcmpi(type, "none") != 0) {
-		recordEncoderProps = CreateEncoderPropertyView(type, "recordEncoder.json");
+		const std::string encoderFile = EncoderSettingsFile("recordEncoder", QT_UTF8(type));
+		usedLegacyRecordFile = !ProfileFileExists(main->GetCurrentProfile(), encoderFile);
+		const char *settingsFile = usedLegacyRecordFile ? "recordEncoder.json" : encoderFile.c_str();
+		recordEncoderProps = CreateEncoderPropertyView(type, settingsFile);
 		recordEncoderProps->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
 		ui->advOutRecEncoderProps->layout()->addWidget(recordEncoderProps);
 		connect(recordEncoderProps, &OBSPropertiesView::Changed, this,
@@ -2135,6 +2177,15 @@ void OBSBasicSettings::LoadAdvOutputRecordingEncoderProperties()
 	}
 
 	curAdvRecordEncoder = type;
+
+	// Same one-time legacy migration as the streaming encoder, above.
+	if (recordEncoderProps && usedLegacyRecordFile) {
+		const std::filesystem::path perEncoderPath =
+			main->GetCurrentProfile().path /
+			std::filesystem::u8path(EncoderSettingsFile("recordEncoder", QT_UTF8(type)));
+		if (obs_data_t *s = recordEncoderProps->GetSettings())
+			obs_data_save_json_safe(s, perEncoderPath.u8string().c_str(), "tmp", "bak");
+	}
 
 	if (!SetComboByValue(ui->advOutRecEncoder, type)) {
 		uint32_t caps = obs_get_encoder_caps(type);
@@ -2652,12 +2703,6 @@ void OBSBasicSettings::LoadAdvancedSettings()
 	int maxRetries = config_get_int(main->Config(), "Output", "MaxRetries");
 	int whipDisconnectGraceSec = config_get_int(main->Config(), "Output", "WhipDisconnectGraceSec");
 	int whipReconnectBackoffSec = config_get_int(main->Config(), "Output", "WhipReconnectBackoffSec");
-	bool packetLossReconnect = config_has_user_value(main->Config(), "Output", "PacketLossReconnect")
-					   ? config_get_bool(main->Config(), "Output", "PacketLossReconnect")
-					   : true;
-	int packetLossStatPeriodSec = config_get_int(main->Config(), "Output", "PacketLossStatPeriodSec");
-	int packetLossWindowSec = config_get_int(main->Config(), "Output", "PacketLossWindowSec");
-	double packetLossThresholdPercent = config_get_double(main->Config(), "Output", "PacketLossThresholdPercent");
 	const char *filename = config_get_string(main->Config(), "Output", "FilenameFormatting");
 	bool overwriteIfExists = config_get_bool(main->Config(), "Output", "OverwriteIfExists");
 	const char *bindIP = config_get_string(main->Config(), "Output", "BindIP");
@@ -2695,11 +2740,6 @@ void OBSBasicSettings::LoadAdvancedSettings()
 	ui->reconnectMaxRetries->setValue(maxRetries);
 	ui->whipDisconnectGraceSec->setValue(whipDisconnectGraceSec);
 	ui->whipReconnectBackoffSec->setValue(whipReconnectBackoffSec);
-
-	ui->packetLossReconnectEnable->setChecked(packetLossReconnect);
-	ui->packetLossStatPeriodSec->setValue(packetLossStatPeriodSec > 0 ? packetLossStatPeriodSec : 30);
-	ui->packetLossWindowSec->setValue(packetLossWindowSec > 0 ? packetLossWindowSec : 300);
-	ui->packetLossThresholdPercent->setValue(packetLossThresholdPercent > 0.0 ? packetLossThresholdPercent : 1.5);
 
 	ui->streamDelaySec->setValue(delaySec);
 	ui->streamDelayPreserve->setChecked(preserveDelay);
@@ -2749,6 +2789,15 @@ void OBSBasicSettings::LoadAdvancedSettings()
 	ui->browserHWAccel->setChecked(browserHWAccel);
 	prevBrowserAccel = ui->browserHWAccel->isChecked();
 #endif
+
+	// RTP loss-driven restart (see BasicOutputHandler::ApplyDegradeLoss).
+	// Defaults are registered in OBSBasic::OBSInit, so config_get_* returns
+	// them even before this page is ever saved.
+	ui->rtpLossRestart->setChecked(config_get_bool(App()->GetAppConfig(), "General", "RtpLossRestart"));
+	ui->rtpLossRestartThreshold->setValue(
+		config_get_double(App()->GetAppConfig(), "General", "RtpLossRestartThresholdPct"));
+	ui->rtpLossRestartDuration->setValue(
+		(int)config_get_int(App()->GetAppConfig(), "General", "RtpLossRestartDurationSec"));
 
 	SetComboByValue(ui->hotkeyFocusType, hotkeyFocusType);
 
@@ -3324,6 +3373,12 @@ void OBSBasicSettings::SaveAdvancedSettings()
 	config_set_bool(App()->GetAppConfig(), "General", "BrowserHWAccel", browserHWAccel);
 #endif
 
+	config_set_bool(App()->GetAppConfig(), "General", "RtpLossRestart", ui->rtpLossRestart->isChecked());
+	config_set_double(App()->GetAppConfig(), "General", "RtpLossRestartThresholdPct",
+			  ui->rtpLossRestartThreshold->value());
+	config_set_int(App()->GetAppConfig(), "General", "RtpLossRestartDurationSec",
+		       ui->rtpLossRestartDuration->value());
+
 	if (WidgetChanged(ui->hotkeyFocusType)) {
 		QString str = GetComboData(ui->hotkeyFocusType);
 		config_set_string(App()->GetUserConfig(), "General", "HotkeyFocusType", QT_TO_UTF8(str));
@@ -3372,12 +3427,6 @@ void OBSBasicSettings::SaveAdvancedSettings()
 	SaveSpinBox(ui->reconnectMaxRetries, "Output", "MaxRetries");
 	SaveSpinBox(ui->whipDisconnectGraceSec, "Output", "WhipDisconnectGraceSec");
 	SaveSpinBox(ui->whipReconnectBackoffSec, "Output", "WhipReconnectBackoffSec");
-	SaveCheckBox(ui->packetLossReconnectEnable, "Output", "PacketLossReconnect");
-	SaveSpinBox(ui->packetLossStatPeriodSec, "Output", "PacketLossStatPeriodSec");
-	SaveSpinBox(ui->packetLossWindowSec, "Output", "PacketLossWindowSec");
-	if (WidgetChanged(ui->packetLossThresholdPercent))
-		config_set_double(main->Config(), "Output", "PacketLossThresholdPercent",
-				  ui->packetLossThresholdPercent->value());
 	SaveComboData(ui->bindToIP, "Output", "BindIP");
 	SaveComboData(ui->ipFamily, "Output", "IPFamily");
 	SaveCheckBox(ui->autoRemux, "Video", "AutoRemux");
@@ -3631,8 +3680,12 @@ void OBSBasicSettings::SaveOutputSettings()
 	SaveSpinBox(ui->advRBSecMax, "AdvOut", "RecRBTime");
 	SaveSpinBox(ui->advRBMegsMax, "AdvOut", "RecRBSize");
 
-	WriteJsonData(streamEncoderProps, "streamEncoder.json");
-	WriteJsonData(recordEncoderProps, "recordEncoder.json");
+	if (!curAdvStreamEncoder.isEmpty())
+		WriteJsonData(streamEncoderProps,
+			      EncoderSettingsFile("streamEncoder", curAdvStreamEncoder).c_str());
+	if (recordEncoderProps && !curAdvRecordEncoder.isEmpty())
+		WriteJsonData(recordEncoderProps,
+			      EncoderSettingsFile("recordEncoder", curAdvRecordEncoder).c_str());
 	main->ResetOutputs();
 }
 
@@ -4100,13 +4153,19 @@ void OBSBasicSettings::on_advOutEncoder_currentIndexChanged()
 {
 	QString encoder = GetComboData(ui->advOutEncoder);
 	if (!loading) {
-		bool loadSettings = encoder == curAdvStreamEncoder;
+		// Persist the outgoing encoder's panel under its own file before
+		// replacing it, so switching video encoders keeps each encoder's
+		// own properties instead of overwriting/losing them.
+		if (streamEncoderProps && !curAdvStreamEncoder.isEmpty())
+			WriteJsonData(streamEncoderProps,
+				      EncoderSettingsFile("streamEncoder", curAdvStreamEncoder).c_str());
 
 		delete streamEncoderProps;
-		streamEncoderProps = CreateEncoderPropertyView(QT_TO_UTF8(encoder),
-							       loadSettings ? "streamEncoder.json" : nullptr, true);
+		const std::string encoderFile = EncoderSettingsFile("streamEncoder", encoder);
+		streamEncoderProps = CreateEncoderPropertyView(QT_TO_UTF8(encoder), encoderFile.c_str(), true);
 		streamEncoderProps->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
 		ui->advOutEncoderLayout->addWidget(streamEncoderProps);
+		curAdvStreamEncoder = encoder;
 	}
 
 	ui->advOutUseRescale->setVisible(true);
@@ -4116,8 +4175,15 @@ void OBSBasicSettings::on_advOutEncoder_currentIndexChanged()
 void OBSBasicSettings::on_advOutRecEncoder_currentIndexChanged(int idx)
 {
 	if (!loading) {
+		// Same as the streaming handler: keep each recording video
+		// encoder's properties in its own file.
+		if (recordEncoderProps && !curAdvRecordEncoder.isEmpty())
+			WriteJsonData(recordEncoderProps,
+				      EncoderSettingsFile("recordEncoder", curAdvRecordEncoder).c_str());
+
 		delete recordEncoderProps;
 		recordEncoderProps = nullptr;
+		curAdvRecordEncoder = GetComboData(ui->advOutRecEncoder);
 	}
 
 	if (idx <= 0) {
@@ -4128,15 +4194,15 @@ void OBSBasicSettings::on_advOutRecEncoder_currentIndexChanged(int idx)
 	}
 
 	QString encoder = GetComboData(ui->advOutRecEncoder);
-	bool loadSettings = encoder == curAdvRecordEncoder;
 
 	if (!loading) {
-		recordEncoderProps = CreateEncoderPropertyView(QT_TO_UTF8(encoder),
-							       loadSettings ? "recordEncoder.json" : nullptr, true);
+		const std::string encoderFile = EncoderSettingsFile("recordEncoder", encoder);
+		recordEncoderProps = CreateEncoderPropertyView(QT_TO_UTF8(encoder), encoderFile.c_str(), true);
 		recordEncoderProps->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
 		ui->advOutRecEncoderProps->layout()->addWidget(recordEncoderProps);
 		connect(recordEncoderProps, &OBSPropertiesView::Changed, this,
 			&OBSBasicSettings::AdvReplayBufferChanged);
+		curAdvRecordEncoder = encoder;
 	}
 
 	ui->advOutRecUseRescale->setVisible(true);
@@ -5240,13 +5306,20 @@ void OBSBasicSettings::AdvReplayBufferChanged()
 
 		const OBSProfile &currentProfile = main->GetCurrentProfile();
 
-		const std::filesystem::path jsonFilePath =
-			currentProfile.path / std::filesystem::u8path("recordEncoder.json");
+		const std::string perEncoder =
+			EncoderSettingsFile(useStream ? "streamEncoder" : "recordEncoder", encoder);
+		const std::filesystem::path perEncoderPath =
+			currentProfile.path / std::filesystem::u8path(perEncoder);
+		const std::string fileName =
+			std::filesystem::exists(perEncoderPath) ? perEncoder
+								: (useStream ? "streamEncoder.json" : "recordEncoder.json");
+		const std::filesystem::path jsonFilePath = currentProfile.path / std::filesystem::u8path(fileName);
 
 		if (!jsonFilePath.empty()) {
 			OBSDataAutoRelease data =
 				obs_data_create_from_json_file_safe(jsonFilePath.u8string().c_str(), "bak");
-			obs_data_apply(settings, data);
+			if (data)
+				obs_data_apply(settings, data);
 		}
 	}
 

@@ -210,6 +210,7 @@ private:
 	/* stream */
 	void InitStreamPage();
 	bool IsCustomService() const;
+	bool IsSRT() const;
 	inline bool IsWHIP() const;
 	bool IsWHIPSimulcast() const;
 	void UpdateWHIPSimulcastControls();
@@ -224,9 +225,11 @@ private:
 
 	// ui->customServer (the server/endpoint address line edit) and
 	// ui->key (the stream key / WHIP bearer token line edit) are each
-	// shared by all three service categories in ui->service - built-in
-	// ("Common"), "Custom" (rtmp_custom - RTMP/RTMPS/SRT/RIST), and
-	// "WHIP" - see ServiceChanged()'s serverStackedWidget page 1. Without
+	// shared by the service categories in ui->service - built-in
+	// ("Common"), "Custom" (rtmp_custom - RTMP/RTMPS/SRT/RIST), the
+	// dedicated "SRT" entry (also rtmp_custom, kept separate so its
+	// endpoint doesn't collide with Custom), and "WHIP" - see
+	// ServiceChanged()'s serverStackedWidget page 1. Without
 	// this, switching categories left whichever endpoint/key was typed
 	// for one showing (and about to be saved) under another - e.g. a
 	// Twitch stream key ending up saved as a Custom RTMP server's key, or
@@ -235,13 +238,15 @@ private:
 	// within the same Settings session; SwapStreamDestinationField()
 	// keeps ui->customServer's and ui->key's displayed text in sync with
 	// whichever category is currently selected.
-	enum class StreamDestinationField { Common, Custom, WHIP };
+	enum class StreamDestinationField { Common, Custom, SRT, WHIP };
 	StreamDestinationField lastStreamDestinationField = StreamDestinationField::Common;
 	QString customServiceEndpoint;
 	QString whipServiceEndpoint;
+	QString srtServiceEndpoint;
 	QString commonServiceKey;
 	QString customServiceKey;
 	QString whipServiceKey;
+	QString srtServiceKey;
 	void SwapStreamDestinationField();
 
 	/* WHIP Simulcast per-layer resolution/bitrate settings (Settings >

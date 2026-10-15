@@ -7,6 +7,8 @@
 
 #include <qt-wrappers.hpp>
 
+#include <cctype>
+
 using namespace std;
 
 static OBSData GetDataFromJsonFile(const char *jsonFile)
@@ -32,6 +34,35 @@ static OBSData GetDataFromJsonFile(const char *jsonFile)
 	}
 
 	return data.Get();
+}
+
+// Per-encoder settings live in their own file ("streamEncoder_<id>.json" /
+// "recordEncoder_<id>.json") so switching the video encoder in Settings >
+// Output no longer makes one encoder's properties bleed into another. The
+// legacy shared file is only used as a one-time fallback for the encoder
+// that was active before the upgrade.
+static std::string EncoderSettingsFileName(const char *prefix, const char *encoder)
+{
+	std::string name = prefix;
+	name += "_";
+	for (const char ch : std::string(encoder ? encoder : ""))
+		name += (std::isalnum((unsigned char)ch) || ch == '_' || ch == '-') ? ch : '_';
+	name += ".json";
+	return name;
+}
+
+static OBSData GetEncoderSettings(const char *prefix, const char *encoder)
+{
+	const OBSBasic *basic = OBSBasic::Get();
+	const OBSProfile &currentProfile = basic->GetCurrentProfile();
+
+	const std::string perEncoder = EncoderSettingsFileName(prefix, encoder);
+	const std::filesystem::path perEncoderPath = currentProfile.path / std::filesystem::u8path(perEncoder);
+
+	if (std::filesystem::exists(perEncoderPath))
+		return GetDataFromJsonFile(perEncoder.c_str());
+
+	return GetDataFromJsonFile((std::string(prefix) + ".json").c_str());
 }
 
 static void ApplyEncoderDefaults(OBSData &settings, const obs_encoder_t *encoder)
@@ -75,8 +106,8 @@ AdvancedOutput::AdvancedOutput(OBSBasic *main_) : BasicOutputHandler(main_)
 	useStreamEncoder = astrcmpi(recordEncoder, "none") == 0;
 	useStreamAudioEncoder = astrcmpi(recAudioEncoder, "none") == 0;
 
-	OBSData streamEncSettings = GetDataFromJsonFile("streamEncoder.json");
-	OBSData recordEncSettings = GetDataFromJsonFile("recordEncoder.json");
+	OBSData streamEncSettings = GetEncoderSettings("streamEncoder", streamEncoder);
+	OBSData recordEncSettings = GetEncoderSettings("recordEncoder", recordEncoder);
 
 	if (ffmpegOutput) {
 		fileOutput = obs_output_create("ffmpeg_output", "adv_ffmpeg_output", nullptr, nullptr);
@@ -204,7 +235,7 @@ void AdvancedOutput::UpdateStreamSettings()
 	bool dynBitrate = config_get_bool(main->Config(), "Output", "DynamicBitrate");
 	const char *streamEncoder = config_get_string(main->Config(), "AdvOut", "Encoder");
 
-	OBSData settings = GetDataFromJsonFile("streamEncoder.json");
+	OBSData settings = GetEncoderSettings("streamEncoder", streamEncoder);
 	ApplyEncoderDefaults(settings, videoStreaming);
 
 	if (applyServiceSettings) {
@@ -262,7 +293,8 @@ void AdvancedOutput::UpdateStreamSettings()
 
 inline void AdvancedOutput::UpdateRecordingSettings()
 {
-	OBSData settings = GetDataFromJsonFile("recordEncoder.json");
+	const char *recordEncoder = config_get_string(main->Config(), "AdvOut", "RecEncoder");
+	OBSData settings = GetEncoderSettings("recordEncoder", recordEncoder);
 	obs_encoder_update(videoRecording, settings);
 }
 
