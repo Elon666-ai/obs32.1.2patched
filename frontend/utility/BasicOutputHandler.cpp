@@ -667,7 +667,8 @@ void BasicOutputHandler::StartDegrade(obs_service_t *service, obs_output_t *outp
 			     [this](const DegradeClient::LossStats &s) {
 				     ApplyDegradeLoss(s.proto.c_str(), s.unrecovered_pct, s.raw_pct,
 						      s.bitrate_mbps, s.rtt_ms);
-			     });
+			     },
+			     [this](const std::string &reason) { ApplyDegradeReconnect(reason.c_str()); });
 }
 
 void BasicOutputHandler::StopDegrade()
@@ -796,6 +797,24 @@ void BasicOutputHandler::ApplyDegradeLoss(const char *proto, double unrecoveredP
 	degradeLossHighSinceNs = now;
 
 	// Same restart machinery as a layer change, at the current layer count.
+	degradeTargetLayers = degradeCurLayers;
+	QueueDegradeRestart();
+}
+
+// RECONNECT command from mmx: the tuned SRT latency now exceeds this
+// connection's negotiated window, so restart the output now to re-handshake
+// and apply it. This replaces mmx silently closing the connection (which the
+// sender only notices after its idle timeout) with an immediate reconnect.
+void BasicOutputHandler::ApplyDegradeReconnect(const char *reason)
+{
+	std::lock_guard<std::mutex> lk(degradeMutex);
+
+	if (!degradeActive)
+		return;
+
+	blog(LOG_WARNING, "[degrade] RECONNECT requested%s%s - restarting stream",
+	     (reason && reason[0]) ? ": " : "", (reason && reason[0]) ? reason : "");
+
 	degradeTargetLayers = degradeCurLayers;
 	QueueDegradeRestart();
 }

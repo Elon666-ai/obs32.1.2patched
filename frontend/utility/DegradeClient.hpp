@@ -62,6 +62,13 @@ public:
 	// Called from the worker thread; must not block indefinitely.
 	using LossCallback = std::function<void(const LossStats &)>;
 
+	// RECONNECT is a command from mmx: restart the output (reconnect) now,
+	// because the tuned SRT latency is larger than this connection's
+	// negotiated TSBPD window and needs a new handshake to take effect.
+	// Unlike mmx silently closing the connection, this lets the executor act
+	// immediately instead of waiting for the SRT idle timeout.
+	using ReconnectCallback = std::function<void(const std::string &reason)>;
+
 	DegradeClient();
 	~DegradeClient();
 
@@ -69,9 +76,10 @@ public:
 	DegradeClient &operator=(const DegradeClient &) = delete;
 
 	// Starts (or re-targets) the client at ws_url. Assumes any previous
-	// session was stopped first; ownership of cb/loss_cb is taken. No-op
+	// session was stopped first; ownership of the callbacks is taken. No-op
 	// if already connected to the same endpoint.
-	void Start(const std::string &ws_url, TargetCallback cb, LossCallback loss_cb = nullptr);
+	void Start(const std::string &ws_url, TargetCallback cb, LossCallback loss_cb = nullptr,
+		   ReconnectCallback reconnect_cb = nullptr);
 	void Stop();
 
 	// Derives the degrade WS URL for service (WHIP or SRT). Empty if the
@@ -85,6 +93,7 @@ private:
 	void HandleMessage(const std::string &payload);
 	void DispatchTarget(int layers, int bitrate_percent);
 	void DispatchLoss(const LossStats &s);
+	void DispatchReconnect(const std::string &reason);
 
 	std::unique_ptr<client_t> client;
 	conn_ptr conn;
@@ -92,6 +101,7 @@ private:
 	std::string ws_url;
 	TargetCallback callback;
 	LossCallback loss_callback;
+	ReconnectCallback reconnect_callback;
 
 	mutable std::mutex mtx;
 

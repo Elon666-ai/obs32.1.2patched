@@ -155,6 +155,7 @@ protected:
 private:
 	void ApplyDegradeTarget(int layers, int bitratePercent);
 	void ApplyDegradeLoss(const char *proto, double unrecoveredPct, double rawPct, double bitrateMbps, double rttMs);
+	void ApplyDegradeReconnect(const char *reason);
 	void ApplyDegradeBitrate(int bitratePercent);
 	void QueueDegradeRestart();
 	void PerformDegradeRestart();
