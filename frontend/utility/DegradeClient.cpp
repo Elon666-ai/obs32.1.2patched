@@ -195,7 +195,10 @@ void DegradeClient::Start(const std::string &url, TargetCallback cb, LossCallbac
 	client->init_asio();
 
 	running.store(true);
+	last_rx_ns.store(0);
+	last_ping_sent_ns.store(0);
 	worker = std::thread(&DegradeClient::WorkerMain, this);
+	watchdog = std::thread(&DegradeClient::WatchdogMain, this);
 }
 
 void DegradeClient::Stop()
@@ -215,6 +218,11 @@ void DegradeClient::Stop()
 	if (worker.joinable())
 		worker.join();
 	worker = std::thread();
+	// Join the watchdog before destroying the client: it may still post to
+	// the io_service. It exits within kWatchdogTickMs.
+	if (watchdog.joinable())
+		watchdog.join();
+	watchdog = std::thread();
 	client.reset();
 
 	std::lock_guard<std::mutex> lk(mtx);
@@ -226,6 +234,73 @@ void DegradeClient::Stop()
 	conn.reset();
 }
 
+// WatchdogMain force-terminates a connection that has gone silent for longer
+// than kKeepaliveTimeoutMs. websocketpp only reports close/fail on socket
+// events, so a half-open TCP (common after the server restarts or a network
+// path changes) can otherwise leave the executor "connected" forever, never
+// resubscribing. mmx pings every 30s, so a healthy link keeps last_rx_ns
+// fresh well within the timeout.
+void DegradeClient::WatchdogMain()
+{
+	while (running.load()) {
+		os_sleep_ms((uint32_t)kWatchdogTickMs);
+		if (!running.load())
+			return;
+
+		conn_ptr c;
+		{
+			std::lock_guard<std::mutex> lk(mtx);
+			c = conn;
+		}
+		if (!c)
+			continue;
+
+		const uint64_t now = os_gettime_ns();
+
+		// Send our own keepalive ping; mmx (gorilla) answers with a pong.
+		const uint64_t last_ping = last_ping_sent_ns.load();
+		if (last_ping == 0 || now - last_ping >= kPingIntervalMs * 1000000ULL) {
+			last_ping_sent_ns.store(now);
+			if (client) {
+				client->get_io_service().post([c]() {
+					websocketpp::lib::error_code ec;
+					c->ping("ka", ec);
+				});
+			}
+		}
+
+		const uint64_t last = last_rx_ns.load();
+		if (last == 0 || now - last < kKeepaliveTimeoutMs * 1000000ULL)
+			continue;
+
+		do_log(LOG_WARNING, "WS silent for %llums, forcing reconnect",
+		       (unsigned long long)((now - last) / 1000000ULL));
+		// Avoid re-triggering until the next successful connect.
+		last_rx_ns.store(0);
+
+		{
+			std::lock_guard<std::mutex> lk(mtx);
+			if (!ws_url.empty()) {
+				next_reconnect_attempt_ns = os_gettime_ns();
+				reconnect_backoff_ms = kReconnectBackoffMinMs;
+			}
+		}
+
+		// Tear down on the io_service thread. terminate() is the immediate
+		// (no handshake) close; it drives the close/fail handler, which
+		// clears conn and schedules the reconnect.
+		if (client) {
+			client->get_io_service().post([c]() {
+				websocketpp::lib::error_code ec;
+				c->terminate(ec);
+			});
+		} else {
+			websocketpp::lib::error_code ec;
+			c->terminate(ec);
+		}
+	}
+}
+
 void DegradeClient::WorkerMain()
 {
 	client->set_open_handler([this](handle_t) {
@@ -235,7 +310,21 @@ void DegradeClient::WorkerMain()
 			url = ws_url;
 			reconnect_backoff_ms = kReconnectBackoffMinMs;
 		}
+		const uint64_t now = os_gettime_ns();
+		last_rx_ns.store(now);
+		last_ping_sent_ns.store(now);
 		do_log(LOG_INFO, "WS connected to %s", url.c_str());
+	});
+
+	// We still answer mmx's pings (return true) because the server enforces a
+	// 30s+5s read deadline on the pong; both pings and pongs refresh
+	// last_rx_ns for the watchdog.
+	client->set_ping_handler([this](handle_t, std::string) {
+		last_rx_ns.store(os_gettime_ns());
+		return true;
+	});
+	client->set_pong_handler([this](handle_t, std::string) {
+		last_rx_ns.store(os_gettime_ns());
 	});
 
 	client->set_close_handler([this](handle_t) {
@@ -274,8 +363,10 @@ void DegradeClient::WorkerMain()
 		do_log(LOG_INFO, "WS fail (ec=%s)", ec_msg.empty() ? "(unknown)" : ec_msg.c_str());
 	});
 
-	client->set_message_handler(
-		[this](handle_t, client_t::message_ptr msg) { HandleMessage(msg->get_payload()); });
+	client->set_message_handler([this](handle_t, client_t::message_ptr msg) {
+		last_rx_ns.store(os_gettime_ns());
+		HandleMessage(msg->get_payload());
+	});
 
 	{
 		std::lock_guard<std::mutex> lk(mtx);
@@ -341,6 +432,11 @@ void DegradeClient::ConnectLocked()
 
 		conn->append_header("Authorization", std::string("Bearer ") + secret);
 	}
+
+	// Report the OBS version so the ingest side can log which client build
+	// is connected. SRT itself carries no version, so this control WS is the
+	// only channel that can convey it.
+	conn->append_header("User-Agent", std::string("OBS/") + obs_get_version_string());
 
 	client->connect(conn);
 }

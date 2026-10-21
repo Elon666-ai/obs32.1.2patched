@@ -88,6 +88,7 @@ public:
 
 private:
 	void WorkerMain();
+	void WatchdogMain();
 	void ConnectLocked();
 	bool ShouldReconnectLocked() const;
 	void HandleMessage(const std::string &payload);
@@ -107,6 +108,20 @@ private:
 
 	std::atomic<bool> running;
 	std::thread worker;
+
+	// Liveness watchdog. The client sends its own keepalive ping every
+	// kPingIntervalMs and mmx answers with a pong; receiving that (or any
+	// other frame) refreshes last_rx_ns. If nothing is received for
+	// kKeepaliveTimeoutMs the link is treated as half-open - the TCP can die
+	// without websocketpp ever firing close/fail, which previously left the
+	// executor "connected" forever - and force-terminated so the worker
+	// reconnects. The check runs every kWatchdogTickMs.
+	std::thread watchdog;
+	std::atomic<uint64_t> last_rx_ns{0};
+	std::atomic<uint64_t> last_ping_sent_ns{0};
+	static constexpr uint64_t kPingIntervalMs = 10000;
+	static constexpr uint64_t kKeepaliveTimeoutMs = 30000;
+	static constexpr uint64_t kWatchdogTickMs = 5000;
 
 	// Reconnect backoff state (protected by mtx). The close/fail handlers
 	// reset conn and schedule the next retry; the worker loop's idle tick
