@@ -152,6 +152,11 @@ protected:
 	void StartDegrade(obs_service_t *service, obs_output_t *output);
 	void StopDegrade();
 
+	// Force B-frames to 0 on every video encoder of the streaming output
+	// before it starts. WebRTC forwarding (origin -> record/edge) cannot carry
+	// H.264 with B-frames, so a non-zero setting breaks the downstream forward.
+	void ForceZeroBFrames(obs_output_t *output);
+
 private:
 	void ApplyDegradeTarget(int layers, int bitratePercent);
 	void ApplyDegradeLoss(const char *proto, double unrecoveredPct, double rawPct, double bitrateMbps, double rttMs);

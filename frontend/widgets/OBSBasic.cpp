@@ -866,6 +866,22 @@ bool OBSBasic::InitBasicConfigDefaults()
 	config_set_default_bool(activeConfiguration, "Output", "NewSocketLoopEnable", false);
 	config_set_default_bool(activeConfiguration, "Output", "LowLatencyEnable", false);
 
+	// Scheduled streaming ("区间直播") defaults: a single 07:00 -> 06:00 slot
+	// (wraps past midnight) covering every day, with the feature enabled and
+	// active by default so it starts/stops the stream without manual setup.
+	config_set_default_bool(activeConfiguration, "Schedule", "FeatureEnabled", true);
+	config_set_default_bool(activeConfiguration, "Schedule", "Enabled", true);
+	config_set_default_int(activeConfiguration, "Schedule", "Slot.Count", 1);
+	config_set_default_int(activeConfiguration, "Schedule", "Slot0.Start", 7 * 60);
+	config_set_default_int(activeConfiguration, "Schedule", "Slot0.End", 6 * 60);
+	config_set_default_bool(activeConfiguration, "Schedule", "Slot0.Day.Mon", true);
+	config_set_default_bool(activeConfiguration, "Schedule", "Slot0.Day.Tue", true);
+	config_set_default_bool(activeConfiguration, "Schedule", "Slot0.Day.Wed", true);
+	config_set_default_bool(activeConfiguration, "Schedule", "Slot0.Day.Thu", true);
+	config_set_default_bool(activeConfiguration, "Schedule", "Slot0.Day.Fri", true);
+	config_set_default_bool(activeConfiguration, "Schedule", "Slot0.Day.Sat", true);
+	config_set_default_bool(activeConfiguration, "Schedule", "Slot0.Day.Sun", true);
+
 	int i = 0;
 	uint32_t scale_cx = cx;
 	uint32_t scale_cy = cy;

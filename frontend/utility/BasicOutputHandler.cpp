@@ -691,6 +691,40 @@ void BasicOutputHandler::StopDegrade()
 		client->Stop();
 }
 
+// WebRTC forwarding (origin -> record/edge) cannot carry H.264 with B-frames,
+// so force them off on every video encoder of the streaming output before it
+// starts. Different encoders name the option differently (NVENC/x264: "bf",
+// QSV: "bframes"), so set all known keys.
+void BasicOutputHandler::ForceZeroBFrames(obs_output_t *output)
+{
+	if (!output)
+		return;
+
+	for (int i = 0; i < MAX_OUTPUT_VIDEO_ENCODERS; i++) {
+		obs_encoder_t *enc = obs_output_get_video_encoder2(output, i);
+		if (!enc)
+			break;
+
+		OBSDataAutoRelease settings = obs_encoder_get_settings(enc);
+		const int bf = (int)obs_data_get_int(settings, "bf");
+		const int bframes = (int)obs_data_get_int(settings, "bframes");
+		const int maxbf = (int)obs_data_get_int(settings, "max_b_frames");
+
+		// Set unconditionally: when a key is absent the encoder's own default
+		// (NVENC 2, QSV 3) still applies, so only checking the stored value
+		// would miss it.
+		obs_data_set_int(settings, "bf", 0);
+		obs_data_set_int(settings, "bframes", 0);
+		obs_data_set_int(settings, "max_b_frames", 0);
+		obs_encoder_update(enc, settings);
+
+		if (bf != 0 || bframes != 0 || maxbf != 0)
+			blog(LOG_WARNING,
+			     "[bf] forced B-frames=0 on streaming encoder '%s' (was bf=%d bframes=%d max_b_frames=%d)",
+			     obs_encoder_get_id(enc), bf, bframes, maxbf);
+	}
+}
+
 void BasicOutputHandler::ApplyDegradeTarget(int layers, int bitratePercent)
 {
 	std::lock_guard<std::mutex> lk(degradeMutex);
@@ -846,6 +880,8 @@ void BasicOutputHandler::PerformDegradeRestart()
 
 	RebindDegradeLayers(output, want);
 	degradeCurLayers = want;
+
+	ForceZeroBFrames(output);
 
 	if (!obs_output_start(output)) {
 		const char *err = obs_output_get_last_error(output);

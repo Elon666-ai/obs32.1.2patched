@@ -739,6 +739,8 @@ bool SimpleOutput::StartStreaming(obs_service_t *service)
 	obs_queue_task(
 		OBS_TASK_GRAPHICS, [](void *) {}, nullptr, true);
 
+	ForceZeroBFrames(streamOutput);
+
 	if (obs_output_start(streamOutput)) {
 		if (multitrackVideo && multitrackVideoActive)
 			multitrackVideo->StartedStreaming();

@@ -86,7 +86,7 @@ void OBSBasicSettings::InitSchedulePage()
 	auto *addButton = new QPushButton(QTStr("Basic.Settings.Schedule.AddSlot"));
 	addButton->setProperty("class", "icon-plus");
 	connect(addButton, &QPushButton::clicked, this,
-		[this]() { AddScheduleSlotRow(9 * 60, 18 * 60, {true, true, true, true, true, false, false}); });
+		[this]() { AddScheduleSlotRow(7 * 60, 6 * 60, {true, true, true, true, true, true, true}); });
 
 	auto *groupBoxLayout = qobject_cast<QVBoxLayout *>(ui->scheduleGroupBox->layout());
 	groupBoxLayout->addWidget(hintLabel);
