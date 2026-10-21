@@ -7,14 +7,17 @@
 /// Ported from multipusher/utils/tencent.go
 namespace SrtAuth {
 
-/// Tencent main publish key (same as Go TX_KEY_MAIN).
-constexpr const char* TX_KEY_MAIN = "***REMOVED_TX_KEY_MAIN***";
-
-/// Tencent backup publish key (same as Go TX_KEY_BACK).
-constexpr const char* TX_KEY_BACK = "***REMOVED_TX_KEY_BACK***";
-
 /// Default token validity in days.
 constexpr int TX_PUBLISH_TOKEN_DAYS = 90;
+
+/// Resolve the Tencent publish key at runtime. Secrets are intentionally NOT
+/// compiled into the binary; they come from, in order:
+///   1. the TX_KEY_MAIN / TX_KEY_BACK environment variable, then
+///   2. a local `.env` file (conf/.env, bin/conf/.env, .env, or the plugin
+///      data directory).
+/// @param backup  true to read TX_KEY_BACK instead of TX_KEY_MAIN.
+/// @return the key, or an empty string if none is configured.
+std::string GetPublishKey(bool backup = false);
 
 /// Generate txTime (hex unix timestamp) and txSecret (MD5 lowercase hex)
 /// for a given stream key and token lifetime in days.

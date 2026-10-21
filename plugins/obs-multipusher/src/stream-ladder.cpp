@@ -56,6 +56,14 @@ void StreamLadder::LoadFromConfig(const MultipusherConfig& cfg) {
             cfg_.tencentSrt.tokenDays
         );
 
+        if (os.srtURL.empty()) {
+            os.status = "Error: missing TX_KEY";
+            MP_LOG(LOG_ERROR,
+                   "[obs-multipusher]   [%s] %s: no publish key configured "
+                   "(set TX_KEY_MAIN in the environment or .env)",
+                   os.level.c_str(), os.streamName.c_str());
+        }
+
         // Log every stream URL (txSecret masked)
         if (os.audioOnly) {
             MP_LOG(LOG_INFO, "[obs-multipusher]   [%s] %s audio-only (not pushed)",

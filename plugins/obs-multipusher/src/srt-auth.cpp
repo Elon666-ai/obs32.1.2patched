@@ -1,9 +1,15 @@
 #include "srt-auth.hpp"
 
+#include <obs-module.h>
+
 #include <ctime>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <algorithm>
+#include <fstream>
+#include <map>
+#include <mutex>
 #include <sstream>
 #include <iomanip>
 
@@ -212,7 +218,89 @@ void MD5Final(uint8_t digest[16], MD5_CTX* ctx) {
 
 // ── Public API ─────────────────────────────────────────────────────
 
+namespace {
+
+std::string TrimSpace(const std::string& s) {
+    size_t start = s.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos)
+        return std::string();
+    size_t end = s.find_last_not_of(" \t\r\n");
+    return s.substr(start, end - start + 1);
+}
+
+// Parse a minimal KEY=VALUE .env file into `out` (later files win).
+void ParseEnvFile(const char* path, std::map<std::string, std::string>& out) {
+    if (!path || !*path)
+        return;
+
+    std::ifstream in(path);
+    if (!in)
+        return;
+
+    std::string line;
+    while (std::getline(in, line)) {
+        line = TrimSpace(line);
+        if (line.empty() || line[0] == '#')
+            continue;
+        if (line.rfind("export ", 0) == 0)
+            line = TrimSpace(line.substr(7));
+
+        const size_t eq = line.find('=');
+        if (eq == std::string::npos)
+            continue;
+
+        std::string key = TrimSpace(line.substr(0, eq));
+        std::string value = TrimSpace(line.substr(eq + 1));
+        if (value.size() >= 2 &&
+            ((value.front() == '"' && value.back() == '"') ||
+             (value.front() == '\'' && value.back() == '\'')))
+            value = value.substr(1, value.size() - 2);
+
+        if (!key.empty())
+            out[key] = value;
+    }
+}
+
+// Loaded once on first use. Search order matches the config file search, and
+// also covers the plugin data directory (where the build installs data/).
+const std::map<std::string, std::string>& EnvValues() {
+    static std::once_flag once;
+    static std::map<std::string, std::string> values;
+
+    std::call_once(once, [] {
+        const char* candidates[] = {"conf/.env", "bin/conf/.env", ".env"};
+        for (const char* path : candidates)
+            ParseEnvFile(path, values);
+
+        char* moduleEnv = obs_module_file(".env");
+        if (moduleEnv) {
+            ParseEnvFile(moduleEnv, values);
+            bfree(moduleEnv);
+        }
+    });
+
+    return values;
+}
+
+} // namespace
+
 namespace SrtAuth {
+
+std::string GetPublishKey(bool backup) {
+    const char* name = backup ? "TX_KEY_BACK" : "TX_KEY_MAIN";
+
+    // Environment variables take precedence, so CI/deployments can inject the
+    // secret without writing a file.
+    if (const char* env = std::getenv(name); env && *env)
+        return env;
+
+    const auto& values = EnvValues();
+    auto it = values.find(name);
+    if (it != values.end() && !it->second.empty())
+        return it->second;
+
+    return std::string();
+}
 
 std::string MD5Hex(const std::string& input) {
     MD5_CTX ctx;
@@ -243,9 +331,18 @@ void GenTxSecret(const std::string& streamKey, int tokenDays,
              static_cast<unsigned long long>(expiry));
     txTime = txTimeBuf;
 
-    // txSecret: lowercase md5 of (TX_KEY_MAIN + streamKey + txTime)
-    std::string hashInput = std::string(TX_KEY_MAIN) + streamKey + txTime;
-    txSecret = MD5Hex(hashInput);
+    // txSecret: lowercase md5 of (publish key + streamKey + txTime).
+    // The key is resolved at runtime (env / .env) and never compiled in.
+    const std::string key = GetPublishKey(false);
+    if (key.empty()) {
+        blog(LOG_ERROR,
+             "[obs-multipusher] TX_KEY_MAIN is not set; configure it in the "
+             "environment or a local .env file");
+        txSecret.clear();
+        return;
+    }
+
+    txSecret = MD5Hex(key + streamKey + txTime);
 }
 
 std::string BuildSRTURL(const std::string& host, int port,
@@ -258,6 +355,11 @@ std::string BuildSRTURL(const std::string& host, int port,
 
     std::string txTime, txSecret;
     GenTxSecret(streamKey, tokenDays, txTime, txSecret);
+    if (txSecret.empty()) {
+        blog(LOG_ERROR, "[obs-multipusher] refusing to build SRT URL for %s without a publish key",
+             streamKey.c_str());
+        return std::string();
+    }
 
     // Build URL with SRT transport params matching working OBS profiles
     char url[1024];

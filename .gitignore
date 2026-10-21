@@ -58,3 +58,9 @@ additional_install_files/
 
 # Exclude CMake build number cache
 /cmake/.CMakeBuildNumber
+
+# Local-only secrets and configuration (never commit)
+.env
+.env.*
+!.env.example
+plugins/obs-multipusher/data/pusher.local.json

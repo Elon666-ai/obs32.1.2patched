@@ -392,6 +392,10 @@ void MultipusherContext::SyncOBSServiceURL() {
     int tokenDays = config.Get().tencentSrt.tokenDays;
     std::string txTime, txSecret;
     SrtAuth::GenTxSecret(streamKey, tokenDays, txTime, txSecret);
+    if (txSecret.empty()) {
+        MP_LOG(LOG_ERROR, "[obs-multipusher] OBS service sync: TX_KEY_MAIN is not configured");
+        return;
+    }
 
     // ── 4. Replace txSecret= and txTime= in the URL ───────────
     auto replaceParam = [&](const std::string& key, const std::string& newVal) {
