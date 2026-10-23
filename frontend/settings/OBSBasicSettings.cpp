@@ -5892,7 +5892,10 @@ void OBSBasicSettings::UpdateMultitrackVideo()
 	auto toggle_available = !main->Active();
 
 	// FIXME: protocol is not updated properly for WHIP; what do?
-	auto available = protocol.startsWith("RTMP");
+	// ERTMP uses OBS's ordinary RTMP output (plus the separate simulcast
+	// encoders below), not the multitrack-video output, so don't offer its
+	// configuration group.
+	auto available = protocol.startsWith("RTMP") && !IsERTMP();
 
 	if (available && !IsCustomService()) {
 		OBSDataAutoRelease settings = obs_data_create();

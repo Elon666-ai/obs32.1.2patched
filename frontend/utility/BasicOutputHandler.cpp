@@ -236,12 +236,6 @@ BasicOutputHandler::BasicOutputHandler(OBSBasic *main_) : main(main_)
 
 	auto service = main_->GetService();
 	OBSDataAutoRelease settings = obs_service_get_settings(service);
-	auto multitrack_enabled = config_get_bool(main->Config(), "Stream1", "EnableMultitrackVideo") &&
-				  (obs_data_has_user_value(settings, "multitrack_video_configuration_url") ||
-				   strcmp(obs_service_get_id(service), "rtmp_custom") == 0);
-
-	if (multitrack_enabled)
-		multitrackVideo = make_unique<MultitrackVideoOutput>();
 
 	const char *service_protocol = obs_service_get_protocol(service);
 	const bool is_whip = service_protocol && astrcmpi(service_protocol, "WHIP") == 0;
@@ -250,6 +244,16 @@ BasicOutputHandler::BasicOutputHandler(OBSBasic *main_) : main(main_)
 	const bool is_ertmp = service_protocol && astrcmpi(service_protocol, "RTMP") == 0 &&
 			      strcmp(obs_service_get_id(service), "rtmp_custom") == 0 &&
 			      obs_data_get_bool(settings, "is_ertmp");
+
+	// ERTMP uses the regular RTMP output (with the simulcast encoders
+	// below); never route it through the multitrack-video output even if a
+	// stale EnableMultitrackVideo value is still on disk.
+	auto multitrack_enabled = !is_ertmp && config_get_bool(main->Config(), "Stream1", "EnableMultitrackVideo") &&
+				  (obs_data_has_user_value(settings, "multitrack_video_configuration_url") ||
+				   strcmp(obs_service_get_id(service), "rtmp_custom") == 0);
+
+	if (multitrack_enabled)
+		multitrackVideo = make_unique<MultitrackVideoOutput>();
 	const int max_simulcast_layers = (is_srt_custom || is_ertmp) ? 4 : 5;
 	const int configured_layers = config_get_int(main->Config(), "Stream1", "WHIPSimulcastTotalLayers");
 	if ((is_whip || is_srt_custom || is_ertmp) && configured_layers > 1)
