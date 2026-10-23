@@ -36,10 +36,10 @@ extern QCefCookieManager *panel_cookies;
 extern bool cef_js_avail;
 
 enum class ListOpt : int {
-	ShowAll = 1,
 	Custom,
 	WHIP,
 	SRT,
+	ERTMP,
 };
 
 enum class Section : int {
@@ -49,8 +49,12 @@ enum class Section : int {
 
 bool OBSBasicSettings::IsCustomService() const
 {
-	const int option = ui->service->currentData().toInt();
-	return option == (int)ListOpt::Custom || option == (int)ListOpt::SRT;
+	return IsSRT() || IsERTMP();
+}
+
+bool OBSBasicSettings::IsERTMP() const
+{
+	return ui->service->currentData().toInt() == (int)ListOpt::ERTMP;
 }
 
 bool OBSBasicSettings::IsSRT() const
@@ -65,7 +69,7 @@ inline bool OBSBasicSettings::IsWHIP() const
 
 bool OBSBasicSettings::IsWHIPSimulcast() const
 {
-	return IsWHIP() || (IsCustomService() && protocol.compare("SRT", Qt::CaseInsensitive) == 0);
+	return IsWHIP() || IsSRT() || IsERTMP();
 }
 
 void OBSBasicSettings::UpdateWHIPSimulcastControls()
@@ -73,9 +77,7 @@ void OBSBasicSettings::UpdateWHIPSimulcastControls()
 	const bool simulcast = IsWHIPSimulcast();
 	ui->whipSimulcastGroupBox->setVisible(simulcast);
 	ui->whipSimulcastGroupBox->setEnabled(simulcast);
-	ui->whipSimulcastTotalLayers->setMaximum(IsCustomService() && protocol.compare("SRT", Qt::CaseInsensitive) == 0
-							? 4
-							: 5);
+	ui->whipSimulcastTotalLayers->setMaximum(IsWHIP() ? 5 : 4);
 }
 
 void OBSBasicSettings::InitStreamPage()
@@ -153,7 +155,8 @@ void OBSBasicSettings::LoadStream1Settings()
 	const char *bearer_token = obs_data_get_string(settings, "bearer_token");
 	const char *backup_server = obs_data_get_string(settings, "backup_server");
 
-	const bool is_srt = is_rtmp_custom && strcmp(obs_data_get_string(settings, "service"), "SRT") == 0;
+	const bool is_ertmp = is_rtmp_custom && obs_data_get_bool(settings, "is_ertmp");
+	const bool is_srt = is_rtmp_custom && !is_ertmp && strcmp(obs_data_get_string(settings, "service"), "SRT") == 0;
 
 	if (is_rtmp_custom || is_whip)
 		ui->customServer->setText(server);
@@ -162,21 +165,25 @@ void OBSBasicSettings::LoadStream1Settings()
 	// is actually loaded from disk, so SwapStreamDestinationField()
 	// doesn't blank out the others on the first switch this session -
 	// see its declaration in the header for why these are kept separate.
-	if (is_srt) {
+	if (is_ertmp) {
+		ertmpServiceEndpoint = QT_UTF8(server);
+		ertmpServiceKey = QT_UTF8(key);
+		lastStreamDestinationField = StreamDestinationField::ERTMP;
+	} else if (is_srt) {
 		srtServiceEndpoint = QT_UTF8(server);
 		srtServiceKey = QT_UTF8(key);
 		lastStreamDestinationField = StreamDestinationField::SRT;
 	} else if (is_rtmp_custom) {
-		customServiceEndpoint = QT_UTF8(server);
-		customServiceKey = QT_UTF8(key);
-		lastStreamDestinationField = StreamDestinationField::Custom;
+		// Migrate the removed Custom service into the new ERTMP preset.
+		ertmpServiceEndpoint = QT_UTF8(server);
+		ertmpServiceKey = QT_UTF8(key);
+		lastStreamDestinationField = StreamDestinationField::ERTMP;
 	} else if (is_whip) {
 		whipServiceEndpoint = QT_UTF8(server);
 		whipServiceKey = QT_UTF8(bearer_token);
 		lastStreamDestinationField = StreamDestinationField::WHIP;
 	} else {
-		commonServiceKey = QT_UTF8(key);
-		lastStreamDestinationField = StreamDestinationField::Common;
+		lastStreamDestinationField = StreamDestinationField::ERTMP;
 	}
 
 	// service.json only ever holds *one* service type's settings - saving
@@ -194,9 +201,16 @@ void OBSBasicSettings::LoadStream1Settings()
 		const char *value = config_get_string(main->Config(), "Stream1", key_name);
 		return value ? QT_UTF8(value) : QString();
 	};
-	if (!is_rtmp_custom || is_srt) {
-		customServiceEndpoint = load_persisted("CustomServiceEndpoint");
-		customServiceKey = load_persisted("CustomServiceKey");
+	// An active ERTMP service (or a legacy Custom service being migrated to
+	// ERTMP) is authoritative. Otherwise restore ERTMP's own shadow values,
+	// falling back to the removed Custom service for first-use migration.
+	if (!is_ertmp && !(is_rtmp_custom && !is_srt)) {
+		ertmpServiceEndpoint = load_persisted("ERTMPServerEndpoint");
+		ertmpServiceKey = load_persisted("ERTMPServerKey");
+		if (ertmpServiceEndpoint.isEmpty())
+			ertmpServiceEndpoint = load_persisted("CustomServiceEndpoint");
+		if (ertmpServiceKey.isEmpty())
+			ertmpServiceKey = load_persisted("CustomServiceKey");
 	}
 	if (!is_srt) {
 		srtServiceEndpoint = load_persisted("SrtServiceEndpoint");
@@ -204,21 +218,17 @@ void OBSBasicSettings::LoadStream1Settings()
 		// the user gives it its own; once persisted it stays
 		// independent (see SwapStreamDestinationField).
 		if (srtServiceEndpoint.isEmpty())
-			srtServiceEndpoint = customServiceEndpoint;
+			srtServiceEndpoint = ertmpServiceEndpoint;
 		srtServiceKey = load_persisted("SrtServiceKey");
 		if (srtServiceKey.isEmpty())
-			srtServiceKey = customServiceKey;
+			srtServiceKey = ertmpServiceKey;
 	}
 	if (!is_whip) {
 		whipServiceEndpoint = load_persisted("WhipServiceEndpoint");
 		whipServiceKey = load_persisted("WhipServiceKey");
 	}
-	if (is_rtmp_custom || is_whip) {
-		commonServiceKey = load_persisted("CommonServiceKey");
-	}
-
 	if (is_rtmp_custom) {
-		int service_idx = ui->service->findData(QVariant((int)(is_srt ? ListOpt::SRT : ListOpt::Custom)));
+		int service_idx = ui->service->findData(QVariant((int)(is_srt ? ListOpt::SRT : ListOpt::ERTMP)));
 		ui->service->setCurrentIndex(service_idx >= 0 ? service_idx : 0);
 		lastServiceIdx = ui->service->currentIndex();
 		lastCustomServer = ui->customServer->text();
@@ -230,13 +240,8 @@ void OBSBasicSettings::LoadStream1Settings()
 		ui->authPw->setText(QT_UTF8(password));
 		ui->useAuth->setChecked(use_auth);
 	} else {
-		int idx = ui->service->findText(service);
-		if (idx == -1) {
-			if (service && *service)
-				ui->service->insertItem(1, service);
-			idx = 1;
-		}
-		ui->service->setCurrentIndex(idx);
+		int idx = is_whip ? ui->service->findData(QVariant((int)ListOpt::WHIP)) : 0;
+		ui->service->setCurrentIndex(idx >= 0 ? idx : 0);
 		lastServiceIdx = idx;
 
 		bool bw_test = obs_data_get_bool(settings, "bwtest");
@@ -367,6 +372,7 @@ void OBSBasicSettings::SaveStream1Settings()
 {
 	bool customServer = IsCustomService();
 	bool srt = IsSRT();
+	bool ertmp = IsERTMP();
 	bool whip = IsWHIP();
 	const char *service_id = "rtmp_common";
 
@@ -400,6 +406,8 @@ void OBSBasicSettings::SaveStream1Settings()
 		}
 		if (srt)
 			obs_data_set_string(settings, "service", "SRT");
+		if (ertmp)
+			obs_data_set_bool(settings, "is_ertmp", true);
 	}
 
 	if (!!auth && strcmp(auth->service(), "Twitch") == 0) {
@@ -436,7 +444,7 @@ void OBSBasicSettings::SaveStream1Settings()
 	// service.json only ever holds the *currently selected* category's
 	// endpoint/key - saving overwrites it entirely, so the other two
 	// categories' settings would otherwise only survive in the
-	// customServiceEndpoint/whipServiceEndpoint/etc. in-memory fields,
+	// service-specific in-memory fields,
 	// which don't outlive this dialog. Sync the just-saved category's
 	// in-memory copy with what was actually applied (ui->useAuth etc.
 	// aren't tracked in these, only endpoint/key/bearer token), then
@@ -447,22 +455,19 @@ void OBSBasicSettings::SaveStream1Settings()
 	if (srt) {
 		srtServiceEndpoint = ui->customServer->text();
 		srtServiceKey = ui->key->text();
-	} else if (customServer) {
-		customServiceEndpoint = ui->customServer->text();
-		customServiceKey = ui->key->text();
+	} else if (ertmp) {
+		ertmpServiceEndpoint = ui->customServer->text();
+		ertmpServiceKey = ui->key->text();
 	} else if (whip) {
 		whipServiceEndpoint = ui->customServer->text();
 		whipServiceKey = ui->key->text();
-	} else {
-		commonServiceKey = ui->key->text();
 	}
-	config_set_string(main->Config(), "Stream1", "CustomServiceEndpoint", QT_TO_UTF8(customServiceEndpoint));
-	config_set_string(main->Config(), "Stream1", "CustomServiceKey", QT_TO_UTF8(customServiceKey));
+	config_set_string(main->Config(), "Stream1", "ERTMPServerEndpoint", QT_TO_UTF8(ertmpServiceEndpoint));
+	config_set_string(main->Config(), "Stream1", "ERTMPServerKey", QT_TO_UTF8(ertmpServiceKey));
 	config_set_string(main->Config(), "Stream1", "SrtServiceEndpoint", QT_TO_UTF8(srtServiceEndpoint));
 	config_set_string(main->Config(), "Stream1", "SrtServiceKey", QT_TO_UTF8(srtServiceKey));
 	config_set_string(main->Config(), "Stream1", "WhipServiceEndpoint", QT_TO_UTF8(whipServiceEndpoint));
 	config_set_string(main->Config(), "Stream1", "WhipServiceKey", QT_TO_UTF8(whipServiceKey));
-	config_set_string(main->Config(), "Stream1", "CommonServiceKey", QT_TO_UTF8(commonServiceKey));
 	main->auth = auth;
 	if (!!main->auth) {
 		main->auth->LoadUI();
@@ -867,42 +872,11 @@ void OBSBasicSettings::UpdateKeyLink()
 
 void OBSBasicSettings::LoadServices(bool showAll)
 {
-	obs_properties_t *props = obs_get_service_properties("rtmp_common");
-
-	OBSDataAutoRelease settings = obs_data_create();
-
-	obs_data_set_bool(settings, "show_all", showAll);
-
-	obs_property_t *prop = obs_properties_get(props, "show_all");
-	obs_property_modified(prop, settings);
-
 	ui->service->blockSignals(true);
 	ui->service->clear();
-
-	QStringList names;
-
-	obs_property_t *services = obs_properties_get(props, "service");
-	size_t services_count = obs_property_list_item_count(services);
-	for (size_t i = 0; i < services_count; i++) {
-		const char *name = obs_property_list_item_string(services, i);
-		names.push_back(name);
-	}
-
-	if (showAll)
-		names.sort(Qt::CaseInsensitive);
-
+	ui->service->addItem(QTStr("WHIP"), QVariant((int)ListOpt::WHIP));
 	ui->service->addItem(QTStr("Basic.Settings.Stream.Service.SRT"), QVariant((int)ListOpt::SRT));
-	if (obs_is_output_protocol_registered("WHIP"))
-		ui->service->addItem(QTStr("WHIP"), QVariant((int)ListOpt::WHIP));
-	ui->service->addItem(QTStr("Basic.AutoConfig.StreamPage.Service.Custom"), QVariant((int)ListOpt::Custom));
-
-	for (QString &name : names)
-		ui->service->addItem(name);
-
-	if (!showAll) {
-		ui->service->addItem(QTStr("Basic.AutoConfig.StreamPage.Service.ShowAll"),
-				     QVariant((int)ListOpt::ShowAll));
-	}
+	ui->service->addItem(QTStr("Basic.Settings.Stream.Service.ERTMP"), QVariant((int)ListOpt::ERTMP));
 
 	if (!lastService.isEmpty()) {
 		int idx = ui->service->findText(lastService);
@@ -910,9 +884,8 @@ void OBSBasicSettings::LoadServices(bool showAll)
 			ui->service->setCurrentIndex(idx);
 	}
 
-	obs_properties_destroy(props);
-
 	ui->service->blockSignals(false);
+	UNUSED_PARAMETER(showAll);
 }
 
 static inline bool is_auth_service(const std::string &service)
@@ -971,11 +944,8 @@ static void get_yt_ch_title(Ui::OBSBasicSettings *ui)
 #endif
 
 // ui->customServer (endpoint) and ui->key (stream key / WHIP bearer token)
-// are each shared across the built-in ("Common"), "Custom" (rtmp_custom),
-// and "WHIP" service entries - see the field declarations in
-// OBSBasicSettings.hpp for why. Call this *before* ServiceChanged() runs on
-// a service switch (and before IsCustomService()/IsWHIP() below reflect the
-// *new* selection) so the outgoing category's typed endpoint/key is stashed
+// are shared by ERTMP, SRT and WHIP. Call this before ServiceChanged() so
+// the outgoing category's typed endpoint/key is stashed
 // under its own keys, then the incoming category's remembered endpoint/key
 // (possibly empty, if never touched this session) is put in the boxes
 // instead of leaving the outgoing category's text sitting there under the
@@ -983,9 +953,9 @@ static void get_yt_ch_title(Ui::OBSBasicSettings *ui)
 void OBSBasicSettings::SwapStreamDestinationField()
 {
 	switch (lastStreamDestinationField) {
-	case StreamDestinationField::Custom:
-		customServiceEndpoint = ui->customServer->text();
-		customServiceKey = ui->key->text();
+	case StreamDestinationField::ERTMP:
+		ertmpServiceEndpoint = ui->customServer->text();
+		ertmpServiceKey = ui->key->text();
 		break;
 	case StreamDestinationField::SRT:
 		srtServiceEndpoint = ui->customServer->text();
@@ -995,26 +965,20 @@ void OBSBasicSettings::SwapStreamDestinationField()
 		whipServiceEndpoint = ui->customServer->text();
 		whipServiceKey = ui->key->text();
 		break;
-	case StreamDestinationField::Common:
-		commonServiceKey = ui->key->text();
-		break;
 	}
 
 	if (IsSRT()) {
 		ui->customServer->setText(srtServiceEndpoint);
 		ui->key->setText(srtServiceKey);
 		lastStreamDestinationField = StreamDestinationField::SRT;
-	} else if (IsCustomService()) {
-		ui->customServer->setText(customServiceEndpoint);
-		ui->key->setText(customServiceKey);
-		lastStreamDestinationField = StreamDestinationField::Custom;
+	} else if (IsERTMP()) {
+		ui->customServer->setText(ertmpServiceEndpoint);
+		ui->key->setText(ertmpServiceKey);
+		lastStreamDestinationField = StreamDestinationField::ERTMP;
 	} else if (IsWHIP()) {
 		ui->customServer->setText(whipServiceEndpoint);
 		ui->key->setText(whipServiceKey);
 		lastStreamDestinationField = StreamDestinationField::WHIP;
-	} else {
-		ui->key->setText(commonServiceKey);
-		lastStreamDestinationField = StreamDestinationField::Common;
 	}
 }
 
@@ -1027,12 +991,6 @@ void OBSBasicSettings::UseStreamKeyAdvClicked()
 
 void OBSBasicSettings::on_service_currentIndexChanged(int idx)
 {
-	if (ui->service->currentData().toInt() == (int)ListOpt::ShowAll) {
-		LoadServices(true);
-		ui->service->showPopup();
-		return;
-	}
-
 	SwapStreamDestinationField();
 	ServiceChanged();
 
@@ -1049,11 +1007,11 @@ void OBSBasicSettings::on_service_currentIndexChanged(int idx)
 
 	if (ServiceSupportsCodecCheck() && UpdateResFPSLimits()) {
 		lastServiceIdx = idx;
-		if (IsCustomService())
+		if (IsSRT() || IsERTMP())
 			lastCustomServer = ui->customServer->text();
 	}
 
-	if (!IsCustomService()) {
+	if (IsWHIP()) {
 		ui->advStreamTrackWidget->setCurrentWidget(ui->streamSingleTracks);
 	} else {
 		SwapMultiTrack(QT_TO_UTF8(protocol));
@@ -1087,7 +1045,7 @@ void OBSBasicSettings::on_customServer_textChanged(const QString &)
 void OBSBasicSettings::ServiceChanged(bool resetFields)
 {
 	std::string service = QT_TO_UTF8(ui->service->currentText());
-	bool custom = IsCustomService();
+	bool custom = IsSRT() || IsERTMP();
 	bool whip = IsWHIP();
 
 	ui->disconnectAccount->setVisible(false);
@@ -1140,46 +1098,13 @@ void OBSBasicSettings::ServiceChanged(bool resetFields)
 
 QString OBSBasicSettings::FindProtocol()
 {
-	// The dedicated "SRT" entry is an explicit choice, so it must not fall
-	// back to RTMP/Custom just because the endpoint box is empty or doesn't
-	// happen to start with "srt://" yet (e.g. while the user is still typing
-	// it) - that made SRT-specific UI (multi-track, network options) revert
-	// to the Custom layout as soon as the address was cleared.
+	// These are explicit presets; protocol selection must not depend on a
+	// partially typed endpoint URL.
 	if (IsSRT())
 		return QString("SRT");
-
-	if (IsCustomService()) {
-		if (ui->customServer->text().isEmpty())
-			return QString("RTMP");
-
-		QString server = ui->customServer->text();
-
-		if (obs_is_output_protocol_registered("RTMPS") && server.startsWith("rtmps://"))
-			return QString("RTMPS");
-
-		if (server.startsWith("srt://"))
-			return QString("SRT");
-
-		if (server.startsWith("rist://"))
-			return QString("RIST");
-
-	} else {
-		obs_properties_t *props = obs_get_service_properties("rtmp_common");
-		obs_property_t *services = obs_properties_get(props, "service");
-
-		OBSDataAutoRelease settings = obs_data_create();
-
-		obs_data_set_string(settings, "service", QT_TO_UTF8(ui->service->currentText()));
-		obs_property_modified(services, settings);
-
-		obs_properties_destroy(props);
-
-		const char *protocol = obs_data_get_string(settings, "protocol");
-		if (protocol && *protocol)
-			return QT_UTF8(protocol);
-	}
-
-	return QString("RTMP");
+	if (IsERTMP())
+		return QString("RTMP");
+	return QString("WHIP");
 }
 
 void OBSBasicSettings::UpdateServerList()
@@ -1238,7 +1163,7 @@ void OBSBasicSettings::on_authPwShow_clicked()
 
 OBSService OBSBasicSettings::SpawnTempService()
 {
-	bool custom = IsCustomService();
+	bool custom = IsSRT() || IsERTMP();
 	bool whip = IsWHIP();
 	const char *service_id = "rtmp_common";
 

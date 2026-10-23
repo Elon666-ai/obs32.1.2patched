@@ -247,9 +247,12 @@ BasicOutputHandler::BasicOutputHandler(OBSBasic *main_) : main(main_)
 	const bool is_whip = service_protocol && astrcmpi(service_protocol, "WHIP") == 0;
 	const bool is_srt_custom = service_protocol && astrcmpi(service_protocol, "SRT") == 0 &&
 					   strcmp(obs_service_get_id(service), "rtmp_custom") == 0;
-	const int max_simulcast_layers = is_srt_custom ? 4 : 5;
+	const bool is_ertmp = service_protocol && astrcmpi(service_protocol, "RTMP") == 0 &&
+			      strcmp(obs_service_get_id(service), "rtmp_custom") == 0 &&
+			      obs_data_get_bool(settings, "is_ertmp");
+	const int max_simulcast_layers = (is_srt_custom || is_ertmp) ? 4 : 5;
 	const int configured_layers = config_get_int(main->Config(), "Stream1", "WHIPSimulcastTotalLayers");
-	if ((is_whip || is_srt_custom) && configured_layers > 1)
+	if ((is_whip || is_srt_custom || is_ertmp) && configured_layers > 1)
 		whipSimulcastEncoders = make_unique<WHIPSimulcastEncoders>(max_simulcast_layers);
 }
 
