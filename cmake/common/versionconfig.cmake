@@ -4,9 +4,34 @@ include_guard(GLOBAL)
 
 set(_obs_version ${_obs_default_version})
 set(_obs_version_canonical ${_obs_default_version})
+set(_obs_version_from_file FALSE)
+
+# A repository-local VERSION file takes precedence over both git describe and
+# OBS_VERSION_OVERRIDE, so release builds can pin the reported version without
+# creating a tag (and without a stale OBS_VERSION_OVERRIDE left in the CMake
+# cache overriding it). Accepts an optional leading "v".
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
+  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" _obs_version_file)
+  string(STRIP "${_obs_version_file}" _obs_version_file)
+  if(_obs_version_file MATCHES "^v?[0-9]+\\.[0-9]+\\.[0-9]+")
+    string(REGEX REPLACE "^v" "" _obs_version_file "${_obs_version_file}")
+    set(_obs_version "${_obs_version_file}")
+    string(
+      REGEX REPLACE
+      "([0-9]+)\\.([0-9]+)\\.([0-9]+).*"
+      "\\1;\\2;\\3"
+      _obs_version_canonical
+      "${_obs_version_file}"
+    )
+    set(_obs_version_from_file TRUE)
+  else()
+    message(WARNING "Ignoring invalid VERSION file (expected <MAJOR>.<MINOR>.<PATCH>[-(rc|beta)<NUMBER>]): ${_obs_version_file}")
+  endif()
+  unset(_obs_version_file)
+endif()
 
 # Attempt to automatically discover expected OBS version
-if(NOT DEFINED OBS_VERSION_OVERRIDE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+if(NOT _obs_version_from_file AND NOT DEFINED OBS_VERSION_OVERRIDE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
   execute_process(
     COMMAND git describe --always --tags --dirty=-modified
     OUTPUT_VARIABLE _obs_version
@@ -23,7 +48,7 @@ if(NOT DEFINED OBS_VERSION_OVERRIDE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git
   if(_obs_version_result EQUAL 0)
     string(REGEX REPLACE ".*([0-9]+)\\.([0-9]+)\\.([0-9]+).*" "\\1;\\2;\\3" _obs_version_canonical ${_obs_version})
   endif()
-elseif(DEFINED OBS_VERSION_OVERRIDE)
+elseif(NOT _obs_version_from_file AND DEFINED OBS_VERSION_OVERRIDE)
   if(OBS_VERSION_OVERRIDE MATCHES "([0-9]+)\\.([0-9]+)\\.([0-9]+).*")
     string(
       REGEX REPLACE
