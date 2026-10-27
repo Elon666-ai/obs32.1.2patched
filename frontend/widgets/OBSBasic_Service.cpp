@@ -23,6 +23,23 @@
 
 constexpr std::string_view OBSServiceFileName = "service.json";
 
+/* SRT, ERTMP and WHIP only support Opus audio. ERTMP is an rtmp_custom
+ * service whose RTMP protocol string cannot distinguish it from plain RTMP,
+ * so check its is_ertmp flag. */
+static bool service_requires_opus(obs_service_t *service)
+{
+	const char *protocol = obs_service_get_protocol(service);
+	if (protocol && (strcmp(protocol, "WHIP") == 0 || strcmp(protocol, "SRT") == 0))
+		return true;
+
+	OBSDataAutoRelease settings = obs_service_get_settings(service);
+	if (obs_data_get_bool(settings, "is_ertmp"))
+		return true;
+
+	const char *name = obs_data_get_string(settings, "service");
+	return name && strcmp(name, "ERTMP") == 0;
+}
+
 void OBSBasic::SaveService()
 {
 	if (!service)
@@ -76,8 +93,8 @@ bool OBSBasic::LoadService()
 	if (!service)
 		return false;
 
-	/* Enforce Opus on WHIP if needed */
-	if (strcmp(obs_service_get_protocol(service), "WHIP") == 0) {
+	/* Enforce Opus on SRT / ERTMP / WHIP if needed */
+	if (service_requires_opus(service)) {
 		const char *option = config_get_string(activeConfiguration, "SimpleOutput", "StreamAudioEncoder");
 		if (strcmp(option, "opus") != 0)
 			config_set_string(activeConfiguration, "SimpleOutput", "StreamAudioEncoder", "opus");

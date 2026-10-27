@@ -406,7 +406,6 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 	HookWidget(ui->customServer,         EDIT_CHANGED,   STREAM1_CHANGED);
 	HookWidget(ui->serviceCustomServer,  EDIT_CHANGED,   STREAM1_CHANGED);
 	HookWidget(ui->key,                  EDIT_CHANGED,   STREAM1_CHANGED);
-	HookWidget(ui->backupServer,         EDIT_CHANGED,   STREAM1_CHANGED);
 	HookWidget(ui->bandwidthTestEnable,  CHECK_CHANGED,  STREAM1_CHANGED);
 	HookWidget(ui->twitchAddonDropdown,  COMBO_CHANGED,  STREAM1_CHANGED);
 	HookWidget(ui->useAuth,              CHECK_CHANGED,  STREAM1_CHANGED);
@@ -2345,8 +2344,12 @@ void OBSBasicSettings::LoadOutputSettings()
 	LoadAdvOutputStreamingEncoderProperties();
 
 	const char *type = config_get_string(main->Config(), "AdvOut", "AudioEncoder");
-	if (!SetComboByValue(ui->advOutAEncoder, type))
-		ui->advOutAEncoder->setCurrentIndex(-1);
+	if (!SetComboByValue(ui->advOutAEncoder, type)) {
+		// SRT / ERTMP / WHIP only offer Opus: migrate an AAC config
+		// (e.g. from a previous service) to the Opus encoder.
+		if (!UsesOpusAudioOnly() || !SetComboByValue(ui->advOutAEncoder, "ffmpeg_opus"))
+			ui->advOutAEncoder->setCurrentIndex(-1);
+	}
 
 	LoadAdvOutputRecordingSettings();
 	LoadAdvOutputRecordingEncoderProperties();

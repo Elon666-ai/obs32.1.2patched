@@ -72,6 +72,11 @@ bool OBSBasicSettings::IsWHIPSimulcast() const
 	return IsWHIP() || IsSRT() || IsERTMP();
 }
 
+bool OBSBasicSettings::UsesOpusAudioOnly() const
+{
+	return IsWHIPSimulcast();
+}
+
 void OBSBasicSettings::UpdateWHIPSimulcastControls()
 {
 	const bool simulcast = IsWHIPSimulcast();
@@ -153,7 +158,6 @@ void OBSBasicSettings::LoadStream1Settings()
 	bool use_custom_server = obs_data_get_bool(settings, "using_custom_server");
 	protocol = QT_UTF8(obs_service_get_protocol(service_obj));
 	const char *bearer_token = obs_data_get_string(settings, "bearer_token");
-	const char *backup_server = obs_data_get_string(settings, "backup_server");
 
 	const bool is_ertmp = is_rtmp_custom && obs_data_get_bool(settings, "is_ertmp");
 	const bool is_srt = is_rtmp_custom && !is_ertmp && strcmp(obs_data_get_string(settings, "service"), "SRT") == 0;
@@ -316,16 +320,7 @@ void OBSBasicSettings::LoadStream1Settings()
 	if (use_custom_server)
 		ui->serviceCustomServer->setText(server);
 
-	if (is_whip) {
-		ui->key->setText(bearer_token);
-		ui->backupServer->setText(QT_UTF8(backup_server));
-		ui->backupServerLabel->setVisible(true);
-		ui->backupServer->setVisible(true);
-	} else {
-		ui->key->setText(key);
-		ui->backupServerLabel->setVisible(false);
-		ui->backupServer->setVisible(false);
-	}
+	ui->key->setText(is_whip ? bearer_token : key);
 	UpdateWHIPSimulcastControls();
 
 	ServiceChanged(true);
@@ -428,7 +423,6 @@ void OBSBasicSettings::SaveStream1Settings()
 	if (whip) {
 		obs_data_set_string(settings, "service", "WHIP");
 		obs_data_set_string(settings, "bearer_token", QT_TO_UTF8(ui->key->text()));
-		obs_data_set_string(settings, "backup_server", QT_TO_UTF8(ui->backupServer->text().trimmed()));
 	} else {
 		obs_data_set_string(settings, "key", QT_TO_UTF8(ui->key->text()));
 	}
@@ -1011,19 +1005,18 @@ void OBSBasicSettings::on_service_currentIndexChanged(int idx)
 			lastCustomServer = ui->customServer->text();
 	}
 
+	// SRT / ERTMP / WHIP only support Opus audio. ServiceSupportsCodecCheck()
+	// returns early for these custom services, so rebuild the encoder lists
+	// here to apply the Opus-only filter.
+	if (!loading && UsesOpusAudioOnly())
+		ResetEncoders(true);
+
 	if (IsWHIP()) {
 		ui->advStreamTrackWidget->setCurrentWidget(ui->streamSingleTracks);
 	} else {
 		SwapMultiTrack(QT_TO_UTF8(protocol));
 	}
 
-	if (IsWHIP()) {
-		ui->backupServerLabel->setVisible(true);
-		ui->backupServer->setVisible(true);
-	} else {
-		ui->backupServerLabel->setVisible(false);
-		ui->backupServer->setVisible(false);
-	}
 	UpdateWHIPSimulcastControls();
 }
 
@@ -2025,6 +2018,7 @@ void OBSBasicSettings::ResetEncoders(bool streamOnly)
 	OBSService service = SpawnTempService();
 	const char **vcodecs = obs_service_get_supported_video_codecs(service);
 	const char **acodecs = obs_service_get_supported_audio_codecs(service);
+	const bool opusOnly = UsesOpusAudioOnly();
 	const char *type;
 	BPtr<char *> output_vcodecs;
 	BPtr<char *> output_acodecs;
@@ -2090,7 +2084,9 @@ void OBSBasicSettings::ResetEncoders(bool streamOnly)
 		}
 
 		if (obs_get_encoder_type(type) == OBS_ENCODER_AUDIO) {
-			if (service_supports_codec(acodecs, codec))
+			const bool codecSupported = service_supports_codec(acodecs, codec) &&
+						    (!opusOnly || strcmp(codec, "opus") == 0);
+			if (codecSupported)
 				ui->advOutAEncoder->addItem(qName, qType);
 			if (!streamOnly)
 				ui->advOutRecAEncoder->addItem(qName, qType);
@@ -2159,8 +2155,9 @@ void OBSBasicSettings::ResetEncoders(bool streamOnly)
 	}
 #endif
 #endif
-	if (service_supports_encoder(acodecs, "CoreAudio_AAC") || service_supports_encoder(acodecs, "libfdk_aac") ||
-	    service_supports_encoder(acodecs, "ffmpeg_aac"))
+	if (!opusOnly && (service_supports_encoder(acodecs, "CoreAudio_AAC") ||
+			  service_supports_encoder(acodecs, "libfdk_aac") ||
+			  service_supports_encoder(acodecs, "ffmpeg_aac")))
 		ui->simpleOutStrAEncoder->addItem(QTStr("Basic.Settings.Output.Simple.Codec.AAC.Default"), "aac");
 	if (service_supports_encoder(acodecs, "ffmpeg_opus"))
 		ui->simpleOutStrAEncoder->addItem(QTStr("Basic.Settings.Output.Simple.Codec.Opus"), "opus");
@@ -2185,7 +2182,7 @@ void OBSBasicSettings::ResetEncoders(bool streamOnly)
 	if (!lastAdvAudioEnc.isEmpty()) {
 		int idx = ui->advOutAEncoder->findData(lastAdvAudioEnc);
 		if (idx == -1) {
-			lastAdvAudioEnc = get_adv_audio_fallback(lastAdvAudioEnc);
+			lastAdvAudioEnc = opusOnly ? QString("ffmpeg_opus") : get_adv_audio_fallback(lastAdvAudioEnc);
 			ui->advOutAEncoder->setProperty("changed", QVariant(true));
 			OutputsChanged();
 		}
@@ -2211,7 +2208,7 @@ void OBSBasicSettings::ResetEncoders(bool streamOnly)
 	if (!lastAudioEnc.isEmpty()) {
 		int idx = ui->simpleOutStrAEncoder->findData(lastAudioEnc);
 		if (idx == -1) {
-			lastAudioEnc = (lastAudioEnc == "opus") ? "aac" : "opus";
+			lastAudioEnc = opusOnly ? QString("opus") : ((lastAudioEnc == "opus") ? "aac" : "opus");
 			ui->simpleOutStrAEncoder->setProperty("changed", QVariant(true));
 			OutputsChanged();
 		}

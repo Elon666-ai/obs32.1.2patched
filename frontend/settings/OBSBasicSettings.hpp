@@ -214,6 +214,8 @@ private:
 	bool IsSRT() const;
 	inline bool IsWHIP() const;
 	bool IsWHIPSimulcast() const;
+	/* SRT, ERTMP and WHIP only accept Opus audio. */
+	bool UsesOpusAudioOnly() const;
 	void UpdateWHIPSimulcastControls();
 	void LoadServices(bool showAll);
 	void OnOAuthStreamKeyConnected();
