@@ -8,6 +8,7 @@ endif()
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets Core)
 find_package(FFmpeg REQUIRED COMPONENTS avcodec avutil avformat)
+find_package(Libsrt REQUIRED)
 
 add_library(obs-multipusher MODULE)
 add_library(OBS::multipusher ALIAS obs-multipusher)
@@ -29,6 +30,8 @@ target_sources(
           src/plugin-main.hpp
           src/srt-auth.cpp
           src/srt-auth.hpp
+          src/srt-connection.cpp
+          src/srt-connection.hpp
           src/srt-pusher.cpp
           src/srt-pusher.hpp
           src/status-reporter.cpp
@@ -50,6 +53,7 @@ target_link_libraries(
           FFmpeg::avcodec
           FFmpeg::avutil
           FFmpeg::avformat
+          Libsrt::Libsrt
           Qt::Widgets
           Qt::Core
           $<$<PLATFORM_ID:Windows>:OBS::w32-pthreads>

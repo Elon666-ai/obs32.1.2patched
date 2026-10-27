@@ -1,4 +1,5 @@
 #include "srt-pusher.hpp"
+#include "srt-connection.hpp"
 #include "utils.hpp"
 
 extern "C" {
@@ -6,6 +7,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/opt.h>
 #include <libavutil/log.h>
+#include <libavutil/error.h>
 }
 
 #include <cstdarg>
@@ -23,6 +25,7 @@ extern "C" {
 struct SrtPusher {
     obs_output_t*  output = nullptr;
     AVFormatContext* fmt_ctx = nullptr;
+    SrtConnection* srt = nullptr;
 
     int  video_stream_idx = -1;
     int  audio_stream_idx = -1;
@@ -80,6 +83,31 @@ static inline int64_t rescale_ts(int64_t val, AVRational src, AVRational dst) {
         (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
 }
 
+// ── Custom AVIO bridge (mpegts muxer → libsrt) ───────────────────
+// The muxer writes through this callback. SrtConnection owns the socket and
+// therefore can read SRT_TRACEBSTATS, including unrecoverable packet loss.
+static int srt_pusher_avio_write(void* opaque, const uint8_t* buf, int size) {
+    auto* srt = static_cast<SrtConnection*>(opaque);
+    return srt->Write(buf, size);
+}
+
+// Expose the same proc contract OBS's ffmpeg_mpegts_muxer uses, so the
+// frontend status bar logs "SRT packet loss: x%" for our outputs too.
+// packet_loss_percent uses OBS's formula:
+//   pktSndLossTotal / (pktSentTotal + pktSndLossTotal)
+static void srt_pusher_get_stats_proc(void* data, calldata_t* cd) {
+    auto* sp = static_cast<SrtPusher*>(data);
+    SrtStats st;
+    bool valid = sp && sp->srt && sp->srt->GetStats(st);
+
+    calldata_set_bool(cd, "valid", valid);
+    calldata_set_float(cd, "packet_loss_percent",
+                       valid ? static_cast<float>(st.lossPercent) : 0.0f);
+    calldata_set_int(cd, "packets_expected",
+                     valid ? st.packetsSent + st.packetsLost : 0);
+    calldata_set_int(cd, "packets_lost", valid ? st.packetsLost : 0);
+}
+
 // ── OBS output callbacks ──────────────────────────────────────────
 
 static const char* srt_pusher_get_name(void*) {
@@ -91,12 +119,26 @@ static void* srt_pusher_create(obs_data_t*, obs_output_t* output) {
     sp->output = output;
     const char* nm = obs_output_get_name(output);
     sp->name = nm ? nm : "";
+
+    proc_handler_t* ph = obs_output_get_proc_handler(output);
+    if (ph) {
+        proc_handler_add(ph,
+            "void get_srt_stats(out bool valid, out float packet_loss_percent, "
+            "out int packets_expected, out int packets_lost)",
+            srt_pusher_get_stats_proc, sp);
+    }
+
     MP_LOG(LOG_INFO, "[obs-multipusher] srt_pusher created: %s", sp->name.c_str());
     return sp;
 }
 
 static void srt_pusher_destroy(void* data) {
     auto* sp = static_cast<SrtPusher*>(data);
+    if (sp->srt) {
+        sp->srt->Close();
+        delete sp->srt;
+        sp->srt = nullptr;
+    }
     delete sp;
     MP_LOG(LOG_INFO, "[obs-multipusher] srt_pusher destroyed");
 }
@@ -235,18 +277,47 @@ static bool srt_pusher_start_impl(void* data) {
         MP_LOG(LOG_INFO, "[obs-multipusher] srt_pusher: audio stream added");
     }
 
-    // ── Open SRT URL ───────────────────────────────────────────
-    if (!(fmt_ctx->oformat->flags & AVFMT_NOFILE)) {
-        ret = avio_open2(&fmt_ctx->pb, url, AVIO_FLAG_WRITE, nullptr, nullptr);
-        if (ret < 0) {
-            char errbuf[256];
-            av_strerror(ret, errbuf, sizeof(errbuf));
-            MP_LOG(LOG_ERROR, "[obs-multipusher] srt_pusher: avio_open2 failed: %s", errbuf);
-            avformat_free_context(fmt_ctx);
-            obs_data_release(settings);
-            return false;
-        }
+    // ── Open SRT sender (libsrt, so stats are readable) ─────────
+    // We do not use avio_open2("srt://...") because FFmpeg keeps its SRT
+    // socket private, which makes SRT_TRACEBSTATS (unrecoverable loss, RTT,
+    // retransmits) inaccessible. Instead SrtConnection owns the socket and
+    // the mpegts muxer writes through a custom AVIOContext.
+    auto* srt = new SrtConnection();
+    std::string srtErr;
+    if (!srt->Open(url, sp->name, srtErr)) {
+        MP_LOG(LOG_ERROR, "[obs-multipusher] srt_pusher[%s]: SRT connect failed: %s",
+               sp->name.c_str(), srtErr.c_str());
+        delete srt;
+        avformat_free_context(fmt_ctx);
+        obs_data_release(settings);
+        return false;
     }
+
+    const int payloadSize = srt->PayloadSize() > 0 ? srt->PayloadSize() : 1316;
+    auto* avioBuf = static_cast<unsigned char*>(av_malloc(payloadSize));
+    if (!avioBuf) {
+        MP_LOG(LOG_ERROR, "[obs-multipusher] srt_pusher[%s]: av_malloc(%d) failed",
+               sp->name.c_str(), payloadSize);
+        srt->Close();
+        delete srt;
+        avformat_free_context(fmt_ctx);
+        obs_data_release(settings);
+        return false;
+    }
+
+    fmt_ctx->pb = avio_alloc_context(avioBuf, payloadSize, 1, srt, nullptr,
+                                     srt_pusher_avio_write, nullptr);
+    if (!fmt_ctx->pb) {
+        MP_LOG(LOG_ERROR, "[obs-multipusher] srt_pusher[%s]: avio_alloc_context failed",
+               sp->name.c_str());
+        av_free(avioBuf);
+        srt->Close();
+        delete srt;
+        avformat_free_context(fmt_ctx);
+        obs_data_release(settings);
+        return false;
+    }
+    fmt_ctx->pb->max_packet_size = payloadSize;
 
     // ── Write header ────────────────────────────────────────────
     ret = avformat_write_header(fmt_ctx, nullptr);
@@ -254,12 +325,15 @@ static bool srt_pusher_start_impl(void* data) {
         char errbuf[256];
         av_strerror(ret, errbuf, sizeof(errbuf));
         MP_LOG(LOG_ERROR, "[obs-multipusher] srt_pusher: write_header failed: %s", errbuf);
-        avio_closep(&fmt_ctx->pb);
+        avio_context_free(&fmt_ctx->pb);
+        srt->Close();
+        delete srt;
         avformat_free_context(fmt_ctx);
         obs_data_release(settings);
         return false;
     }
 
+    sp->srt = srt;
     sp->fmt_ctx = fmt_ctx;
     sp->active = true;
     sp->sent_audio = false;
@@ -301,9 +375,17 @@ static void srt_pusher_stop(void* data, uint64_t) {
     if (sp->fmt_ctx) {
         av_write_trailer(sp->fmt_ctx);
         if (sp->fmt_ctx->pb)
-            avio_closep(&sp->fmt_ctx->pb);
+            avio_context_free(&sp->fmt_ctx->pb);
         avformat_free_context(sp->fmt_ctx);
         sp->fmt_ctx = nullptr;
+    }
+
+    // Close after the muxer has written its trailer so the session summary
+    // includes the final SRT packet counters.
+    if (sp->srt) {
+        sp->srt->Close();
+        delete sp->srt;
+        sp->srt = nullptr;
     }
 
     MP_LOG(LOG_INFO, "[obs-multipusher] srt_pusher: stopped");
