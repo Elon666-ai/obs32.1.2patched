@@ -162,15 +162,19 @@ void OBSBasicSettings::LoadStream1Settings()
 	const bool is_ertmp = is_rtmp_custom && obs_data_get_bool(settings, "is_ertmp");
 	const bool is_srt = is_rtmp_custom && !is_ertmp && strcmp(obs_data_get_string(settings, "service"), "SRT") == 0;
 
+	QString serverText = QT_UTF8(server);
+	if (is_ertmp && serverText.startsWith("rtmp://", Qt::CaseInsensitive))
+		serverText.replace(0, 7, "ertmp://");
+
 	if (is_rtmp_custom || is_whip)
-		ui->customServer->setText(server);
+		ui->customServer->setText(serverText);
 
 	// Seed each service type's remembered endpoint/key from whichever one
 	// is actually loaded from disk, so SwapStreamDestinationField()
 	// doesn't blank out the others on the first switch this session -
 	// see its declaration in the header for why these are kept separate.
 	if (is_ertmp) {
-		ertmpServiceEndpoint = QT_UTF8(server);
+		ertmpServiceEndpoint = serverText;
 		ertmpServiceKey = QT_UTF8(key);
 		lastStreamDestinationField = StreamDestinationField::ERTMP;
 	} else if (is_srt) {
@@ -236,13 +240,6 @@ void OBSBasicSettings::LoadStream1Settings()
 		ui->service->setCurrentIndex(service_idx >= 0 ? service_idx : 0);
 		lastServiceIdx = ui->service->currentIndex();
 		lastCustomServer = ui->customServer->text();
-
-		bool use_auth = obs_data_get_bool(settings, "use_auth");
-		const char *username = obs_data_get_string(settings, "username");
-		const char *password = obs_data_get_string(settings, "password");
-		ui->authUsername->setText(QT_UTF8(username));
-		ui->authPw->setText(QT_UTF8(password));
-		ui->useAuth->setChecked(use_auth);
 	} else {
 		int idx = is_whip ? ui->service->findData(QVariant((int)ListOpt::WHIP)) : 0;
 		ui->service->setCurrentIndex(idx >= 0 ? idx : 0);
@@ -393,12 +390,10 @@ void OBSBasicSettings::SaveStream1Settings()
 			obs_data_set_string(settings, "server", QT_TO_UTF8(ui->server->currentData().toString()));
 		}
 	} else {
-		obs_data_set_string(settings, "server", QT_TO_UTF8(ui->customServer->text().trimmed()));
-		obs_data_set_bool(settings, "use_auth", ui->useAuth->isChecked());
-		if (ui->useAuth->isChecked()) {
-			obs_data_set_string(settings, "username", QT_TO_UTF8(ui->authUsername->text()));
-			obs_data_set_string(settings, "password", QT_TO_UTF8(ui->authPw->text()));
-		}
+		QString serverText = ui->customServer->text().trimmed();
+		if (ertmp && serverText.startsWith("rtmp://", Qt::CaseInsensitive))
+			serverText.replace(0, 7, "ertmp://");
+		obs_data_set_string(settings, "server", QT_TO_UTF8(serverText));
 		if (srt)
 			obs_data_set_string(settings, "service", "SRT");
 		if (ertmp)
@@ -440,8 +435,8 @@ void OBSBasicSettings::SaveStream1Settings()
 	// categories' settings would otherwise only survive in the
 	// service-specific in-memory fields,
 	// which don't outlive this dialog. Sync the just-saved category's
-	// in-memory copy with what was actually applied (ui->useAuth etc.
-	// aren't tracked in these, only endpoint/key/bearer token), then
+	// in-memory copy with what was actually applied (only endpoint/key/
+	// bearer token are tracked in these), then
 	// persist all three categories' remembered values to Stream1 config
 	// so LoadStream1Settings() can restore whichever ones aren't in
 	// service.json on the next load - see its matching load_persisted
@@ -847,12 +842,6 @@ void OBSBasicSettings::UpdateKeyLink()
 
 		ui->streamKeyLabel->setText(lStr.arg(QTStr("Basic.AutoConfig.StreamPage.StreamKey"), file));
 		ui->streamKeyLabel->setToolTip(QTStr("Basic.AutoConfig.StreamPage.StreamKey.ToolTip"));
-
-		ui->authUsernameLabel->setText(lStr.arg(QTStr("Basic.Settings.Stream.Custom.Username"), file));
-		ui->authUsernameLabel->setToolTip(QTStr("Basic.Settings.Stream.Custom.Username.ToolTip"));
-
-		ui->authPwLabel->setText(lStr.arg(QTStr("Basic.Settings.Stream.Custom.Password"), file));
-		ui->authPwLabel->setToolTip(QTStr("Basic.Settings.Stream.Custom.Password.ToolTip"));
 	}
 
 	if (QString(streamKeyLink).isNull() || QString(streamKeyLink).isEmpty()) {
@@ -1005,9 +994,8 @@ void OBSBasicSettings::on_service_currentIndexChanged(int idx)
 			lastCustomServer = ui->customServer->text();
 	}
 
-	// SRT / ERTMP / WHIP only support Opus audio. ServiceSupportsCodecCheck()
-	// returns early for these custom services, so rebuild the encoder lists
-	// here to apply the Opus-only filter.
+	// ServiceSupportsCodecCheck() returns early for these custom services,
+	// so rebuild the encoder lists here to apply the Opus-only filter.
 	if (!loading && UsesOpusAudioOnly())
 		ResetEncoders(true);
 
@@ -1054,19 +1042,12 @@ void OBSBasicSettings::ServiceChanged(bool resetFields)
 		UpdateMultitrackVideo();
 	}
 
-	ui->useAuth->setVisible(custom);
-	ui->authUsernameLabel->setVisible(custom);
-	ui->authUsername->setVisible(custom);
-	ui->authPwLabel->setVisible(custom);
-	ui->authPwWidget->setVisible(custom);
-
 	if (custom || whip) {
 		ui->destinationLayout->insertRow(1, ui->serverLabel, ui->serverStackedWidget);
 
 		ui->serverStackedWidget->setCurrentIndex(1);
 		ui->serverStackedWidget->setVisible(true);
 		ui->serverLabel->setVisible(true);
-		on_useAuth_toggled();
 	} else {
 		ui->serverStackedWidget->setCurrentIndex(0);
 	}
@@ -1140,17 +1121,6 @@ void OBSBasicSettings::on_show_clicked()
 	} else {
 		ui->key->setEchoMode(QLineEdit::Password);
 		ui->show->setText(QTStr("Show"));
-	}
-}
-
-void OBSBasicSettings::on_authPwShow_clicked()
-{
-	if (ui->authPw->echoMode() == QLineEdit::Password) {
-		ui->authPw->setEchoMode(QLineEdit::Normal);
-		ui->authPwShow->setText(QTStr("Hide"));
-	} else {
-		ui->authPw->setEchoMode(QLineEdit::Password);
-		ui->authPwShow->setText(QTStr("Show"));
 	}
 }
 
@@ -1313,19 +1283,6 @@ void OBSBasicSettings::on_disconnectAccount_clicked()
 void OBSBasicSettings::on_useStreamKey_clicked()
 {
 	ui->streamStackWidget->setCurrentIndex((int)Section::StreamKey);
-}
-
-void OBSBasicSettings::on_useAuth_toggled()
-{
-	if (!IsCustomService())
-		return;
-
-	bool use_auth = ui->useAuth->isChecked();
-
-	ui->authUsernameLabel->setVisible(use_auth);
-	ui->authUsername->setVisible(use_auth);
-	ui->authPwLabel->setVisible(use_auth);
-	ui->authPwWidget->setVisible(use_auth);
 }
 
 bool OBSBasicSettings::IsCustomServer()
