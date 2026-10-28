@@ -59,6 +59,14 @@ static bool bitrateValid(const std::string& b) {
 
 ConfigManager::ConfigManager() {
     cfg_.streams = DefaultStreams();
+
+    // Default scheduled interval: Monday-Sunday, 07:00 -> next-day 06:00.
+    IntervalSlot slot;
+    slot.startMinutes = 7 * 60;
+    slot.endMinutes = 6 * 60;
+    for (bool& day : slot.days)
+        day = true;
+    cfg_.intervals.push_back(slot);
 }
 
 std::string ConfigManager::DefaultPath() {

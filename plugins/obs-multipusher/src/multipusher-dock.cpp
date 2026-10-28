@@ -353,21 +353,21 @@ void MultipusherDock::buildIntervalRow(QHBoxLayout* row) {
 
     intervalStart_ = new QTimeEdit();
     intervalStart_->setDisplayFormat("HH:mm");
-    intervalStart_->setTime(QTime(9, 0));
+    intervalStart_->setTime(QTime(7, 0));
     row->addWidget(intervalStart_);
 
     row->addWidget(new QLabel("to"));
 
     intervalEnd_ = new QTimeEdit();
     intervalEnd_->setDisplayFormat("HH:mm");
-    intervalEnd_->setTime(QTime(18, 0));
+    intervalEnd_->setTime(QTime(6, 0));
     row->addWidget(intervalEnd_);
 
     row->addSpacing(6);
 
     for (int i = 0; i < 7; ++i) {
         auto* check = new QCheckBox(kIntervalDayNames[i]);
-        check->setChecked(i < 5); // Mon-Fri default
+        check->setChecked(true); // Mon-Sun default
         row->addWidget(check);
         intervalDays_[i] = check;
         connect(check, &QCheckBox::toggled, this, [this]() { onIntervalEdited(); });
@@ -393,11 +393,11 @@ void MultipusherDock::loadIntervalToUI() {
 
     auto& ivs = ctx()->config.GetMutable().intervals;
     if (ivs.empty()) {
-        // Seed a sensible default so the fixed row is usable.
+        // Seed the default interval (Mon-Sun, 07:00 -> next-day 06:00).
         IntervalSlot s;
-        s.startMinutes = 9 * 60;
-        s.endMinutes   = 18 * 60;
-        for (int d = 0; d < 5; ++d) s.days[d] = true; // Mon-Fri
+        s.startMinutes = 7 * 60;
+        s.endMinutes   = 6 * 60;
+        for (int d = 0; d < 7; ++d) s.days[d] = true;
         ivs.push_back(s);
     }
 
