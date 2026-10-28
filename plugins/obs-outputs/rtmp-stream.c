@@ -38,6 +38,10 @@
 #define MSEC_TO_NSEC 1000000ULL
 #endif
 
+/* Enhanced RTMP publish URLs use ertmp://; librtmp only understands rtmp://. */
+#define ERTMP_PROTO "ertmp://"
+#define RTMP_PROTO "rtmp://"
+
 /* dynamic bitrate coefficients */
 #define DBR_INC_TIMER (4ULL * SEC_TO_NSEC)
 #define DBR_TRIGGER_USEC (200ULL * MSEC_TO_USEC)
@@ -671,7 +675,9 @@ static void *send_thread(void *data)
 		    (stream->video_codec[packet.track_idx] != CODEC_H264 ||
 		     (stream->video_codec[packet.track_idx] == CODEC_H264 && packet.track_idx != 0))) {
 			sent = send_packet_ex(stream, &packet, false, false, packet.track_idx);
-		} else if (packet.type == OBS_ENCODER_AUDIO && packet.track_idx != 0) {
+		} else if (packet.type == OBS_ENCODER_AUDIO &&
+			   (packet.track_idx != 0 ||
+			    stream->audio_codec[packet.track_idx] == AUDIO_CODEC_OPUS)) {
 			sent = send_audio_packet_ex(stream, &packet, false, packet.track_idx);
 		} else {
 			sent = send_packet(stream, &packet, false);
@@ -772,7 +778,7 @@ static bool send_audio_header(struct rtmp_stream *stream, size_t idx, bool *next
 
 	if (obs_encoder_get_extra_data(aencoder, &header, &packet.size)) {
 		packet.data = bmemdup(header, packet.size);
-		if (idx == 0) {
+		if (idx == 0 && stream->audio_codec[0] != AUDIO_CODEC_OPUS) {
 			return send_packet(stream, &packet, true) >= 0;
 		} else {
 			return send_audio_packet_ex(stream, &packet, true, idx) >= 0;
@@ -1262,6 +1268,8 @@ static bool init_connect(struct rtmp_stream *stream)
 	dstr_copy(&stream->password, obs_service_get_connect_info(service, OBS_SERVICE_CONNECT_INFO_PASSWORD));
 	dstr_depad(&stream->path);
 	dstr_depad(&stream->key);
+	if (stream->path.array && strncmp(stream->path.array, ERTMP_PROTO, sizeof(ERTMP_PROTO) - 1) == 0)
+		dstr_replace(&stream->path, ERTMP_PROTO, RTMP_PROTO);
 	drop_b = (int64_t)obs_data_get_int(settings, OPT_DROP_THRESHOLD);
 	drop_p = (int64_t)obs_data_get_int(settings, OPT_PFRAME_DROP_THRESHOLD);
 	stream->max_shutdown_time_sec = (int)obs_data_get_int(settings, OPT_MAX_SHUTDOWN_TIME_SEC);
@@ -1806,7 +1814,7 @@ struct obs_output_info rtmp_output_info = {
 #else
 	.encoded_video_codecs = "h264;av1",
 #endif
-	.encoded_audio_codecs = "aac",
+	.encoded_audio_codecs = "aac;opus",
 	.get_name = rtmp_stream_getname,
 	.create = rtmp_stream_create,
 	.destroy = rtmp_stream_destroy,

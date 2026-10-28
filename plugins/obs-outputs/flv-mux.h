@@ -24,6 +24,7 @@
 enum audio_id_t {
 	AUDIO_CODEC_NONE = 0,
 	AUDIO_CODEC_AAC = 1,
+	AUDIO_CODEC_OPUS, // Enhanced RTMP
 };
 
 enum video_id_t {
@@ -37,6 +38,8 @@ static enum audio_id_t to_audio_type(const char *codec)
 {
 	if (strcmp(codec, "aac") == 0)
 		return AUDIO_CODEC_AAC;
+	if (strcmp(codec, "opus") == 0)
+		return AUDIO_CODEC_OPUS;
 	return AUDIO_CODEC_NONE;
 }
 
