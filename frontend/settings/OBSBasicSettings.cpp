@@ -551,6 +551,12 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 	HookWidget(ui->roiBottom,            SCROLL_CHANGED, VIDEO_CHANGED);
 	HookWidget(ui->roiPriority,          SCROLL_CHANGED, VIDEO_CHANGED);
 	HookWidget(ui->roiBgPriority,        SCROLL_CHANGED, VIDEO_CHANGED);
+	HookWidget(ui->cropStreamGroupBox,   GROUP_CHANGED,  VIDEO_CHANGED);
+	HookWidget(ui->cropStreamX,          SCROLL_CHANGED, VIDEO_CHANGED);
+	HookWidget(ui->cropStreamY,          SCROLL_CHANGED, VIDEO_CHANGED);
+	HookWidget(ui->cropStreamWidth,      SCROLL_CHANGED, VIDEO_CHANGED);
+	HookWidget(ui->cropStreamHeight,     SCROLL_CHANGED, VIDEO_CHANGED);
+	HookWidget(ui->cropStreamFPS,        SCROLL_CHANGED, VIDEO_CHANGED);
 	HookWidget(ui->colorsGroupBox,       GROUP_CHANGED,  A11Y_CHANGED);
 	HookWidget(ui->colorPreset,          COMBO_CHANGED,  A11Y_CHANGED);
 	HookWidget(ui->renderer,             COMBO_CHANGED,  ADV_RESTART);
@@ -1783,6 +1789,41 @@ void OBSBasicSettings::LoadVideoSettings()
 	// which field it is, not part of the stored/displayed number.
 	ui->roiPriority->setValue((int)config_get_int(main->Config(), "Video", "RoiPriority"));
 	ui->roiBgPriority->setValue((int)config_get_int(main->Config(), "Video", "RoiBgPriority"));
+
+	// Crop stream output (Settings > Video > General). Coordinates are in
+	// main-output pixels, same convention as the manual ROI rectangle.
+	obs_video_info cropOvi;
+	const bool haveCropVideo = obs_get_video_info(&cropOvi);
+	const uint32_t cropOutW = haveCropVideo ? video_output_get_width(obs_get_video()) : 0;
+	const uint32_t cropOutH = haveCropVideo ? video_output_get_height(obs_get_video()) : 0;
+
+	int64_t cropX = config_get_int(main->Config(), "Video", "CropStreamX");
+	int64_t cropY = config_get_int(main->Config(), "Video", "CropStreamY");
+	int64_t cropW = config_get_int(main->Config(), "Video", "CropStreamWidth");
+	int64_t cropH = config_get_int(main->Config(), "Video", "CropStreamHeight");
+
+	if (cropOutW && cropOutH) {
+		if (cropW <= 0 || cropH <= 0) {
+			cropW = cropOutW / 2;
+			cropH = cropOutH / 2;
+			cropX = (cropOutW - cropW) / 2;
+			cropY = (cropOutH - cropH) / 2;
+		}
+
+		cropW = std::clamp<int64_t>(cropW, 1, cropOutW);
+		cropH = std::clamp<int64_t>(cropH, 1, cropOutH);
+		cropX = std::clamp<int64_t>(cropX, 0, cropOutW - cropW);
+		cropY = std::clamp<int64_t>(cropY, 0, cropOutH - cropH);
+	}
+
+	ui->cropStreamGroupBox->setChecked(config_get_bool(main->Config(), "Video", "CropStreamEnabled"));
+	ui->cropStreamX->setValue((int)cropX);
+	ui->cropStreamY->setValue((int)cropY);
+	ui->cropStreamWidth->setValue((int)cropW);
+	ui->cropStreamHeight->setValue((int)cropH);
+
+	int64_t cropFps = config_get_int(main->Config(), "Video", "CropStreamFPS");
+	ui->cropStreamFPS->setValue((int)std::clamp<int64_t>(cropFps, 1, 120));
 
 	loading = false;
 }
@@ -3345,6 +3386,18 @@ void OBSBasicSettings::SaveVideoSettings()
 	SaveSpinBox(ui->roiBottom, "Video", "RoiBottom");
 	SaveSpinBox(ui->roiPriority, "Video", "RoiPriority");
 	SaveSpinBox(ui->roiBgPriority, "Video", "RoiBgPriority");
+
+	// Crop stream output - see BasicOutputHandler::StartCropStreaming().
+	// Write the rectangle unconditionally: LoadVideoSettings() prefills a
+	// centered default when nothing is saved yet, and the user may only
+	// toggle the group box without editing those prefilled spin boxes.
+	if (WidgetChanged(ui->cropStreamGroupBox))
+		config_set_bool(main->Config(), "Video", "CropStreamEnabled", ui->cropStreamGroupBox->isChecked());
+	config_set_int(main->Config(), "Video", "CropStreamX", ui->cropStreamX->value());
+	config_set_int(main->Config(), "Video", "CropStreamY", ui->cropStreamY->value());
+	config_set_int(main->Config(), "Video", "CropStreamWidth", ui->cropStreamWidth->value());
+	config_set_int(main->Config(), "Video", "CropStreamHeight", ui->cropStreamHeight->value());
+	config_set_int(main->Config(), "Video", "CropStreamFPS", ui->cropStreamFPS->value());
 	main->UpdateRoiSelectButton();
 }
 

@@ -782,6 +782,78 @@ void OBSBasic::UpdateRoiSelectButton()
 	} else {
 		ui->preview->SetRoiOverlay(false);
 	}
+
+	UpdateCropStreamOverlay();
+}
+
+void OBSBasic::UpdateCropStreamOverlay()
+{
+	obs_video_info ovi;
+	const bool haveVideo = obs_get_video_info(&ovi) && ovi.base_width && ovi.base_height;
+	const uint32_t outputWidth = haveVideo ? video_output_get_width(obs_get_video()) : 0;
+	const uint32_t outputHeight = haveVideo ? video_output_get_height(obs_get_video()) : 0;
+
+	const bool enabled = config_get_bool(Config(), "Video", "CropStreamEnabled");
+	int cropX = config_get_int(Config(), "Video", "CropStreamX");
+	int cropY = config_get_int(Config(), "Video", "CropStreamY");
+	int cropW = config_get_int(Config(), "Video", "CropStreamWidth");
+	int cropH = config_get_int(Config(), "Video", "CropStreamHeight");
+
+	if (!enabled || !haveVideo || !outputWidth || !outputHeight || cropW <= 0 || cropH <= 0) {
+		ui->preview->SetCropOverlay(false, false);
+		return;
+	}
+
+	cropX = std::clamp(cropX, 0, (int)outputWidth - 1);
+	cropY = std::clamp(cropY, 0, (int)outputHeight - 1);
+	cropW = std::clamp(cropW, 1, (int)outputWidth - cropX);
+	cropH = std::clamp(cropH, 1, (int)outputHeight - cropY);
+
+	// Inverse of the canvas -> output scaling in OnCropRegionSelected().
+	const float scaleX = (float)ovi.base_width / (float)outputWidth;
+	const float scaleY = (float)ovi.base_height / (float)outputHeight;
+
+	const bool interactive = !(outputHandler && outputHandler->StreamingActive());
+	ui->preview->SetCropOverlay(true, interactive, cropX * scaleX, cropY * scaleY, (cropX + cropW) * scaleX,
+				    (cropY + cropH) * scaleY);
+}
+
+void OBSBasic::OnCropRegionSelected(float left, float top, float right, float bottom)
+{
+	obs_video_info ovi;
+	if (!obs_get_video_info(&ovi) || !ovi.base_width || !ovi.base_height)
+		return;
+
+	const uint32_t outputWidth = video_output_get_width(obs_get_video());
+	const uint32_t outputHeight = video_output_get_height(obs_get_video());
+	if (!outputWidth || !outputHeight)
+		return;
+
+	const float scaleX = (float)outputWidth / (float)ovi.base_width;
+	const float scaleY = (float)outputHeight / (float)ovi.base_height;
+
+	const int cropX = (int)std::clamp(std::round(std::min(left, right) * scaleX), 0.0f, (float)outputWidth);
+	const int cropY = (int)std::clamp(std::round(std::min(top, bottom) * scaleY), 0.0f, (float)outputHeight);
+	const int cropR = (int)std::clamp(std::round(std::max(left, right) * scaleX), 0.0f, (float)outputWidth);
+	const int cropB = (int)std::clamp(std::round(std::max(top, bottom) * scaleY), 0.0f, (float)outputHeight);
+
+	if (cropR - cropX < 16 || cropB - cropY < 16)
+		return;
+
+	config_set_int(Config(), "Video", "CropStreamX", cropX);
+	config_set_int(Config(), "Video", "CropStreamY", cropY);
+	config_set_int(Config(), "Video", "CropStreamWidth", cropR - cropX);
+	config_set_int(Config(), "Video", "CropStreamHeight", cropB - cropY);
+	config_save_safe(Config(), "tmp", nullptr);
+
+	UpdateCropStreamOverlay();
+
+	ui->statusbar->showMessage(QTStr("Basic.Main.Preview.SetCrop.Saved")
+					    .arg(cropX)
+					    .arg(cropY)
+					    .arg(cropR - cropX)
+					    .arg(cropB - cropY),
+				    5000);
 }
 
 void OBSBasic::OnRoiRegionSelected(float left, float top, float right, float bottom)

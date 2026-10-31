@@ -3,7 +3,10 @@
 #include "DegradeClient.hpp"
 #include "SimpleOutput.hpp"
 
+#include <abs-ts.h>
+
 #include <algorithm>
+#include <cmath>
 
 #include <util/config-file.h>
 #include <util/platform.h>
@@ -71,6 +74,7 @@ void OBSStopStreaming(void *data, calldata_t *params)
 	output->streamingActive = false;
 	output->delayActive = false;
 	output->multitrackVideoActive = false;
+	output->StopCropStreaming();
 	os_atomic_set_bool(&streaming_active, false);
 	QMetaObject::invokeMethod(output->main, "StreamingStop", Q_ARG(int, code), Q_ARG(QString, arg_last_error));
 }
@@ -605,6 +609,364 @@ OBSDataAutoRelease BasicOutputHandler::GenerateMultitrackVideoStreamDumpConfig()
 BasicOutputHandler::~BasicOutputHandler()
 {
 	StopDegrade();
+	StopCropStreaming(true);
+	CleanupCropResources();
+}
+
+static void StopOutputAndWait(obs_output_t *output)
+{
+	if (!output)
+		return;
+
+	if (obs_output_active(output)) {
+		obs_output_force_stop(output);
+
+		// obs_output_force_stop() is not guaranteed to have fully torn
+		// down the encoder/view relation yet. Wait briefly (bounded) so
+		// the crop view can be removed without racing an active encoder.
+		for (int i = 0; i < 500 && obs_output_active(output); i++)
+			os_sleep_ms(10);
+	}
+}
+
+static void ScaleCropBitrate(obs_data_t *settings, const char *key, double ratio)
+{
+	const int value = (int)obs_data_get_int(settings, key);
+	if (value <= 0)
+		return;
+
+	int scaled = (int)std::lround((double)value * ratio);
+	if (scaled < 1)
+		scaled = 1;
+
+	obs_data_set_int(settings, key, scaled);
+}
+
+void BasicOutputHandler::CleanupCropResources()
+{
+	if (cropStreamOutput)
+		StopOutputAndWait(cropStreamOutput);
+
+	cropStreamingActive = false;
+
+	cropVideoEncoder = nullptr;
+	cropAudioEncoder = nullptr;
+
+	if (cropView) {
+		obs_view_set_source(cropView, 0, nullptr);
+		obs_view_remove(cropView);
+		obs_view_destroy(cropView);
+		cropView = nullptr;
+	}
+	cropVideo = nullptr;
+
+	if (cropScene) {
+		obs_scene_release(cropScene);
+		cropScene = nullptr;
+		cropSceneItem = nullptr;
+	}
+
+	cropStreamOutput = nullptr;
+	cropService = nullptr;
+}
+
+void BasicOutputHandler::StopCropStreaming(bool force)
+{
+	if (!cropStreamOutput)
+		return;
+
+	if (force)
+		obs_output_force_stop(cropStreamOutput);
+	else
+		obs_output_stop(cropStreamOutput);
+
+	cropStreamingActive = false;
+}
+
+void BasicOutputHandler::StartCropStreaming(obs_service_t *service)
+{
+	if (!service)
+		return;
+
+	if (cropStreamOutput && obs_output_active(cropStreamOutput))
+		return;
+
+	// Drop resources from a previous run. Safe here because this is only
+	// reached after the main stream has been (re)started, i.e. any old
+	// crop output has already been stopped.
+	CleanupCropResources();
+
+	if (!config_get_bool(main->Config(), "Video", "CropStreamEnabled"))
+		return;
+
+	if (multitrackVideo && multitrackVideoActive) {
+		blog(LOG_WARNING, "[crop] crop stream is not supported with multitrack video output");
+		return;
+	}
+
+	auto mainOutput = StreamingOutput();
+	if (!mainOutput)
+		return;
+
+	obs_encoder_t *mainVideo = obs_output_get_video_encoder(mainOutput);
+	obs_encoder_t *mainAudio = obs_output_get_audio_encoder(mainOutput, 0);
+	if (!mainVideo) {
+		blog(LOG_WARNING, "[crop] main stream has no video encoder, skipping crop stream");
+		return;
+	}
+
+	const uint32_t mainW = obs_encoder_get_width(mainVideo);
+	const uint32_t mainH = obs_encoder_get_height(mainVideo);
+	if (!mainW || !mainH) {
+		blog(LOG_WARNING, "[crop] main stream video size is unavailable, skipping crop stream");
+		return;
+	}
+
+	int cropX = (int)config_get_int(main->Config(), "Video", "CropStreamX");
+	int cropY = (int)config_get_int(main->Config(), "Video", "CropStreamY");
+	int cropW = (int)config_get_int(main->Config(), "Video", "CropStreamWidth");
+	int cropH = (int)config_get_int(main->Config(), "Video", "CropStreamHeight");
+	int cropFps = (int)config_get_int(main->Config(), "Video", "CropStreamFPS");
+	if (cropFps <= 0)
+		cropFps = 15;
+	cropFps = std::clamp(cropFps, 1, 120);
+
+	if (cropW <= 0 || cropH <= 0) {
+		blog(LOG_WARNING, "[crop] invalid crop size %dx%d, skipping crop stream", cropW, cropH);
+		return;
+	}
+
+	cropX = std::clamp(cropX, 0, (int)mainW - 1);
+	cropY = std::clamp(cropY, 0, (int)mainH - 1);
+	cropW = std::min(cropW, (int)mainW - cropX);
+	cropH = std::min(cropH, (int)mainH - cropY);
+
+	// Keep the encoded dimensions even; most hardware encoders reject odd
+	// dimensions for 4:2:0 formats.
+	cropW &= ~1;
+	cropH &= ~1;
+	if (cropW < 2 || cropH < 2) {
+		blog(LOG_WARNING, "[crop] crop size %dx%d is too small, skipping crop stream", cropW, cropH);
+		return;
+	}
+
+	obs_video_info ovi;
+	if (!obs_get_video_info(&ovi) || !ovi.base_width || !ovi.base_height) {
+		blog(LOG_WARNING, "[crop] video info is unavailable, skipping crop stream");
+		return;
+	}
+
+	// The frame rate divisor only supports integer divisions of the main
+	// stream's frame rate (the graphics thread renders all views at the
+	// main rate), so use the closest achievable rate for the encoder while
+	// scaling the bitrate by the configured crop/main frame-rate ratio
+	// (capped at 1, since the crop stream cannot run faster than main).
+	const double mainFps = (double)ovi.fps_num / (double)ovi.fps_den;
+	uint32_t fpsDivisor = 1;
+	if (mainFps > 0.0 && cropFps < mainFps)
+		fpsDivisor = (uint32_t)std::max(1LL, (long long)std::lround(mainFps / (double)cropFps));
+	const double actualCropFps = mainFps > 0.0 ? mainFps / (double)fpsDivisor : (double)cropFps;
+	const double fpsRatio =
+		mainFps > 0.0 ? std::min((double)cropFps, mainFps) / mainFps : 1.0;
+
+	// Config coordinates are in main-output pixels (same convention as the
+	// manual ROI); the view renders the program source in canvas pixels.
+	const double scaleX = (double)ovi.base_width / (double)mainW;
+	const double scaleY = (double)ovi.base_height / (double)mainH;
+
+	int baseX = (int)std::lround((double)cropX * scaleX);
+	int baseY = (int)std::lround((double)cropY * scaleY);
+	int baseW = (int)std::lround((double)cropW * scaleX);
+	int baseH = (int)std::lround((double)cropH * scaleY);
+
+	baseX = std::clamp(baseX, 0, (int)ovi.base_width - 1);
+	baseY = std::clamp(baseY, 0, (int)ovi.base_height - 1);
+	baseW = std::clamp(baseW, 1, (int)ovi.base_width - baseX);
+	baseH = std::clamp(baseH, 1, (int)ovi.base_height - baseY);
+
+	obs_video_info cropOvi = ovi;
+	cropOvi.base_width = (uint32_t)baseW;
+	cropOvi.base_height = (uint32_t)baseH;
+	cropOvi.output_width = (uint32_t)cropW;
+	cropOvi.output_height = (uint32_t)cropH;
+
+	cropView = obs_view_create();
+	if (!cropView) {
+		blog(LOG_WARNING, "[crop] failed to create view");
+		CleanupCropResources();
+		return;
+	}
+
+	cropVideo = obs_view_add2(cropView, &cropOvi);
+	if (!cropVideo) {
+		blog(LOG_WARNING, "[crop] failed to create video mix");
+		CleanupCropResources();
+		return;
+	}
+
+	cropScene = obs_scene_create_private("crop_stream_scene");
+	if (!cropScene) {
+		blog(LOG_WARNING, "[crop] failed to create scene");
+		CleanupCropResources();
+		return;
+	}
+
+	OBSSourceAutoRelease programSource = obs_get_output_source(0);
+	if (!programSource) {
+		blog(LOG_WARNING, "[crop] no program output source");
+		CleanupCropResources();
+		return;
+	}
+
+	cropSceneItem = obs_scene_add(cropScene, programSource);
+	if (!cropSceneItem) {
+		blog(LOG_WARNING, "[crop] failed to add program source to crop scene");
+		CleanupCropResources();
+		return;
+	}
+
+	vec2 offset;
+	vec2_set(&offset, -(float)baseX, -(float)baseY);
+	obs_sceneitem_set_pos(cropSceneItem, &offset);
+
+	obs_view_set_source(cropView, 0, obs_scene_get_source(cropScene));
+
+	// Fixed stream-key pattern: main key + "-h5".
+	OBSDataAutoRelease serviceSettings = obs_service_get_settings(service);
+	OBSDataAutoRelease cropSettings = obs_data_create();
+	obs_data_apply(cropSettings, serviceSettings);
+
+	auto appendKey = [&](const char *field) -> bool {
+		const char *value = obs_data_get_string(cropSettings, field);
+		if (!value || !*value)
+			return false;
+
+		std::string cropKey = value;
+		cropKey += "-h5";
+		obs_data_set_string(cropSettings, field, cropKey.c_str());
+		blog(LOG_INFO, "[crop] stream key: %s", cropKey.c_str());
+		return true;
+	};
+
+	if (!appendKey("key") && !appendKey("stream_id")) {
+		blog(LOG_WARNING, "[crop] main service has no stream key, skipping crop stream");
+		CleanupCropResources();
+		return;
+	}
+
+	cropService = obs_service_create(obs_service_get_type(service), "crop_service", cropSettings, nullptr);
+	if (!cropService) {
+		blog(LOG_WARNING, "[crop] failed to create crop service");
+		CleanupCropResources();
+		return;
+	}
+
+	const char *outputType = GetStreamOutputType(cropService);
+	if (!outputType) {
+		blog(LOG_WARNING, "[crop] no output type for crop service");
+		CleanupCropResources();
+		return;
+	}
+
+	OBSDataAutoRelease mainVideoSettings = obs_encoder_get_settings(mainVideo);
+	OBSDataAutoRelease cropVideoSettings = obs_data_create();
+	obs_data_apply(cropVideoSettings, mainVideoSettings);
+
+	const double areaRatio =
+		((double)cropW * (double)cropH) / ((double)mainW * (double)mainH);
+	const double bitrateRatio = areaRatio * fpsRatio;
+	ScaleCropBitrate(cropVideoSettings, "bitrate", bitrateRatio);
+	ScaleCropBitrate(cropVideoSettings, "max_bitrate", bitrateRatio);
+	ScaleCropBitrate(cropVideoSettings, "maxrate", bitrateRatio);
+	ScaleCropBitrate(cropVideoSettings, "bufsize", bitrateRatio);
+	ScaleCropBitrate(cropVideoSettings, "vbv-maxrate", bitrateRatio);
+	ScaleCropBitrate(cropVideoSettings, "vbv-bufsize", bitrateRatio);
+
+	cropVideoEncoder = obs_video_encoder_create(obs_encoder_get_id(mainVideo), "crop_stream_video",
+						   cropVideoSettings, nullptr);
+	if (!cropVideoEncoder) {
+		blog(LOG_WARNING, "[crop] failed to create video encoder");
+		CleanupCropResources();
+		return;
+	}
+	obs_encoder_release(cropVideoEncoder);
+
+	obs_encoder_set_preferred_video_format(cropVideoEncoder,
+					       obs_encoder_get_preferred_video_format(mainVideo));
+	obs_encoder_set_video(cropVideoEncoder, cropVideo);
+	if (fpsDivisor > 1)
+		obs_encoder_set_frame_rate_divisor(cropVideoEncoder, fpsDivisor);
+
+	if (mainAudio) {
+		OBSDataAutoRelease mainAudioSettings = obs_encoder_get_settings(mainAudio);
+		cropAudioEncoder = obs_audio_encoder_create(obs_encoder_get_id(mainAudio), "crop_stream_audio",
+							    mainAudioSettings,
+							    obs_encoder_get_mixer_index(mainAudio), nullptr);
+		if (cropAudioEncoder) {
+			obs_encoder_release(cropAudioEncoder);
+			obs_encoder_set_audio(cropAudioEncoder, obs_get_audio());
+		} else {
+			blog(LOG_WARNING, "[crop] failed to create audio encoder, continuing without audio");
+		}
+	}
+
+	cropStreamOutput = obs_output_create(outputType, "crop_stream", nullptr, nullptr);
+	if (!cropStreamOutput) {
+		blog(LOG_WARNING, "[crop] failed to create output '%s'", outputType);
+		CleanupCropResources();
+		return;
+	}
+
+	// Main stream outputs inject the OBS absolute-timestamp SEI (see
+	// abs-ts.h); do the same for the crop stream so mmx/players can compute
+	// p2p delay for the -h5 path too.
+	obs_output_add_packet_callback(cropStreamOutput, abs_ts_sei_inject, nullptr);
+
+	obs_output_set_video_encoder(cropStreamOutput, cropVideoEncoder);
+	if (cropAudioEncoder)
+		obs_output_set_audio_encoder(cropStreamOutput, cropAudioEncoder, 0);
+	obs_output_set_service(cropStreamOutput, cropService);
+
+	OBSDataAutoRelease outputSettings = obs_data_create();
+	obs_data_set_string(outputSettings, "bind_ip", config_get_string(main->Config(), "Output", "BindIP"));
+	obs_data_set_string(outputSettings, "ip_family",
+			    config_get_string(main->Config(), "Output", "IPFamily"));
+#ifdef _WIN32
+	obs_data_set_bool(outputSettings, "new_socket_loop_enabled",
+			  config_get_bool(main->Config(), "Output", "NewSocketLoopEnable"));
+	obs_data_set_bool(outputSettings, "low_latency_mode_enabled",
+			  config_get_bool(main->Config(), "Output", "LowLatencyEnable"));
+#endif
+	obs_data_set_bool(outputSettings, "dyn_bitrate",
+			  config_get_bool(main->Config(), "Output", "DynamicBitrate"));
+	obs_output_update(cropStreamOutput, outputSettings);
+
+	const bool reconnect = config_get_bool(main->Config(), "Output", "Reconnect");
+	const int retryDelay = config_get_uint(main->Config(), "Output", "RetryDelay");
+	const int maxRetries = reconnect ? (int)config_get_uint(main->Config(), "Output", "MaxRetries") : 0;
+	obs_output_set_reconnect_settings(cropStreamOutput, maxRetries, retryDelay);
+	obs_output_set_delay(cropStreamOutput, 0, 0);
+
+	obs_queue_task(
+		OBS_TASK_GRAPHICS, [](void *) {}, nullptr, true);
+
+	ForceZeroBFrames(cropStreamOutput);
+
+	blog(LOG_INFO,
+	     "[crop] starting %s output at %dx%d (x=%d y=%d, fps %d requested / %.2f actual, divisor %u, "
+	     "bitrate ratio %.4f)",
+	     outputType, cropW, cropH, cropX, cropY, cropFps, actualCropFps, fpsDivisor, bitrateRatio);
+
+	if (!obs_output_start(cropStreamOutput)) {
+		const char *error = obs_output_get_last_error(cropStreamOutput);
+		blog(LOG_WARNING, "[crop] output failed to start%s%s", error && *error ? ": " : "",
+		     error && *error ? error : "");
+		StopOutputAndWait(cropStreamOutput);
+		CleanupCropResources();
+		return;
+	}
+
+	cropStreamingActive = true;
 }
 
 void BasicOutputHandler::StartDegrade(obs_service_t *service, obs_output_t *output)

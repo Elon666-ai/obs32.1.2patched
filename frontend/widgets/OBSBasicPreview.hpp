@@ -100,6 +100,23 @@ private:
 	bool roiOverlayVisible = false;
 	vec2 roiOverlayTL;
 	vec2 roiOverlayBR;
+
+	// Crop-stream overlay (Settings > Video > General). Unlike the ROI
+	// overlay above this one is directly draggable/resizable whenever a
+	// crop output is enabled and no stream is active. Coordinates are in
+	// canvas/base resolution, same as scene item positions.
+	bool cropOverlayVisible = false;
+	bool cropOverlayInteractive = false;
+	vec2 cropOverlayTL;
+	vec2 cropOverlayBR;
+	bool cropDragging = false;
+	bool cropDragMoved = false;
+	bool cropDragMoving = false;
+	uint32_t cropDragHandle = 0;
+	vec2 cropDragStart;
+	vec2 cropDragTL;
+	vec2 cropDragBR;
+
 	bool overflowHidden = false;
 	bool overflowSelectionHidden = false;
 	bool overflowAlwaysVisible = false;
@@ -239,6 +256,12 @@ public:
 	// as scene item positions); ignored when visible is false.
 	void SetRoiOverlay(bool visible, float left = 0.0f, float top = 0.0f, float right = 0.0f, float bottom = 0.0f);
 
+	// Shows/hides the crop-stream overlay and controls whether it can be
+	// moved/resized. Interactive is false while streaming so the saved
+	// rectangle stays visible without fighting scene editing.
+	void SetCropOverlay(bool visible, bool interactive, float left = 0.0f, float top = 0.0f, float right = 0.0f,
+			    float bottom = 0.0f);
+
 signals:
 	void scalingChanged(float scalingAmount);
 	void fixedScalingChanged(bool isFixed);
@@ -252,4 +275,8 @@ signals:
 	// positions), unordered (start corner, then the opposite corner at
 	// release) and not yet clamped to the canvas bounds.
 	void roiRegionSelected(float left, float top, float right, float bottom);
+
+	// Emitted after a crop-overlay drag/resize ends, in canvas/base
+	// resolution (ordered: left <= right, top <= bottom).
+	void cropRegionSelected(float left, float top, float right, float bottom);
 };

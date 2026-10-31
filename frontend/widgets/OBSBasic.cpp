@@ -441,6 +441,7 @@ OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new 
 	connect(ui->preview, &OBSBasicPreview::roiSelectModeChanged, ui->previewRoiSelectButton,
 		&QPushButton::setChecked);
 	connect(ui->preview, &OBSBasicPreview::roiRegionSelected, this, &OBSBasic::OnRoiRegionSelected);
+	connect(ui->preview, &OBSBasicPreview::cropRegionSelected, this, &OBSBasic::OnCropRegionSelected);
 
 	/* Preview Actions */
 	connect(ui->actionScaleWindow, &QAction::triggered, this, &OBSBasic::setPreviewScalingWindow);
@@ -775,6 +776,12 @@ bool OBSBasic::InitBasicConfigDefaults()
 	// implied by which field it is.
 	config_set_default_int(activeConfiguration, "Video", "RoiPriority", 6);
 	config_set_default_int(activeConfiguration, "Video", "RoiBgPriority", 8);
+	config_set_default_bool(activeConfiguration, "Video", "CropStreamEnabled", false);
+	config_set_default_int(activeConfiguration, "Video", "CropStreamX", 0);
+	config_set_default_int(activeConfiguration, "Video", "CropStreamY", 0);
+	config_set_default_int(activeConfiguration, "Video", "CropStreamWidth", 0);
+	config_set_default_int(activeConfiguration, "Video", "CropStreamHeight", 0);
+	config_set_default_int(activeConfiguration, "Video", "CropStreamFPS", 15);
 	config_set_default_bool(activeConfiguration, "Stream1", "EnableMultitrackVideo", false);
 	config_set_default_bool(activeConfiguration, "Stream1", "MultitrackVideoMaximumAggregateBitrateAuto", true);
 	config_set_default_bool(activeConfiguration, "Stream1", "MultitrackVideoMaximumVideoTracksAuto", true);

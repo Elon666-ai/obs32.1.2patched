@@ -6771,11 +6771,199 @@
               </property>
              </spacer>
             </item>
-           </layout>
-          </widget>
-         </item>
-         <item>
-          <widget class="QGroupBox" name="videoAdvancedOptionsGroupBox">
+            </layout>
+           </widget>
+          </item>
+          <item>
+           <widget class="QGroupBox" name="cropStreamGroupBox">
+            <property name="title">
+             <string>Basic.Settings.Video.CropStream</string>
+            </property>
+            <property name="checkable">
+             <bool>true</bool>
+            </property>
+            <property name="checked">
+             <bool>false</bool>
+            </property>
+            <layout class="QVBoxLayout" name="cropStreamLayout">
+             <property name="leftMargin">
+              <number>9</number>
+             </property>
+             <property name="topMargin">
+              <number>2</number>
+             </property>
+             <property name="rightMargin">
+              <number>9</number>
+             </property>
+             <property name="bottomMargin">
+              <number>9</number>
+             </property>
+             <item>
+              <widget class="QLabel" name="cropStreamInfo">
+               <property name="text">
+                <string>Basic.Settings.Video.CropStreamInfo</string>
+               </property>
+               <property name="wordWrap">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <layout class="QHBoxLayout" name="cropStreamRowLayout">
+               <property name="spacing">
+                <number>6</number>
+               </property>
+               <item>
+                <widget class="QLabel" name="cropStreamXLabel">
+                 <property name="text">
+                  <string>Basic.Settings.Video.CropStreamX</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QSpinBox" name="cropStreamX">
+                 <property name="minimumSize">
+                  <size>
+                   <width>80</width>
+                   <height>0</height>
+                  </size>
+                 </property>
+                 <property name="suffix">
+                  <string> px</string>
+                 </property>
+                 <property name="maximum">
+                  <number>16384</number>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLabel" name="cropStreamYLabel">
+                 <property name="text">
+                  <string>Basic.Settings.Video.CropStreamY</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QSpinBox" name="cropStreamY">
+                 <property name="minimumSize">
+                  <size>
+                   <width>80</width>
+                   <height>0</height>
+                  </size>
+                 </property>
+                 <property name="suffix">
+                  <string> px</string>
+                 </property>
+                 <property name="maximum">
+                  <number>16384</number>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLabel" name="cropStreamWidthLabel">
+                 <property name="text">
+                  <string>Basic.Settings.Video.CropStreamWidth</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QSpinBox" name="cropStreamWidth">
+                 <property name="minimumSize">
+                  <size>
+                   <width>80</width>
+                   <height>0</height>
+                  </size>
+                 </property>
+                 <property name="suffix">
+                  <string> px</string>
+                 </property>
+                 <property name="minimum">
+                  <number>1</number>
+                 </property>
+                 <property name="maximum">
+                  <number>16384</number>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLabel" name="cropStreamHeightLabel">
+                 <property name="text">
+                  <string>Basic.Settings.Video.CropStreamHeight</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QSpinBox" name="cropStreamHeight">
+                 <property name="minimumSize">
+                  <size>
+                   <width>80</width>
+                   <height>0</height>
+                  </size>
+                 </property>
+                 <property name="suffix">
+                  <string> px</string>
+                 </property>
+                 <property name="minimum">
+                  <number>1</number>
+                 </property>
+                 <property name="maximum">
+                  <number>16384</number>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLabel" name="cropStreamFPSLabel">
+                 <property name="text">
+                  <string>Basic.Settings.Video.CropStreamFPS</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QSpinBox" name="cropStreamFPS">
+                 <property name="minimumSize">
+                  <size>
+                   <width>70</width>
+                   <height>0</height>
+                  </size>
+                 </property>
+                 <property name="suffix">
+                  <string> fps</string>
+                 </property>
+                 <property name="minimum">
+                  <number>1</number>
+                 </property>
+                 <property name="maximum">
+                  <number>120</number>
+                 </property>
+                 <property name="value">
+                  <number>15</number>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <spacer name="cropStreamRowSpacer">
+                 <property name="orientation">
+                  <enum>Qt::Horizontal</enum>
+                 </property>
+                 <property name="sizeType">
+                  <enum>QSizePolicy::Expanding</enum>
+                 </property>
+                 <property name="sizeHint" stdset="0">
+                  <size>
+                   <width>0</width>
+                   <height>0</height>
+                  </size>
+                 </property>
+                </spacer>
+               </item>
+              </layout>
+             </item>
+            </layout>
+           </widget>
+          </item>
+          <item>
+           <widget class="QGroupBox" name="videoAdvancedOptionsGroupBox">
+
            <property name="title">
             <string>Basic.Settings.Stream.AdvancedOptions</string>
            </property>

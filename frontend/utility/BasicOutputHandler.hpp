@@ -34,6 +34,20 @@ struct BasicOutputHandler {
 	bool virtualCamActive = false;
 	OBSBasic *main;
 
+	// Optional secondary "crop" stream (Settings > Video > General). It
+	// encodes the configured sub-rectangle of the program output to the
+	// main stream key with "-h5" appended, using the main stream's encoder
+	// settings with the bitrate scaled by the crop-area ratio.
+	OBSOutputAutoRelease cropStreamOutput;
+	OBSEncoder cropVideoEncoder;
+	OBSEncoder cropAudioEncoder;
+	OBSServiceAutoRelease cropService;
+	obs_view_t *cropView = nullptr;
+	video_t *cropVideo = nullptr;
+	obs_scene_t *cropScene = nullptr;
+	obs_sceneitem_t *cropSceneItem = nullptr;
+	bool cropStreamingActive = false;
+
 	std::unique_ptr<MultitrackVideoOutput> multitrackVideo;
 	bool multitrackVideoActive = false;
 
@@ -117,6 +131,12 @@ struct BasicOutputHandler {
 	virtual void StopRecording(bool force = false) = 0;
 	virtual void StopReplayBuffer(bool force = false) { (void)force; }
 	virtual void StopVirtualCam();
+
+	// Starts/stops the optional crop stream. StartCropStreaming() is called
+	// after the main stream output has started successfully, so the main
+	// encoders are initialized and their settings/dimensions are known.
+	void StartCropStreaming(obs_service_t *service);
+	void StopCropStreaming(bool force = false);
 	virtual bool StreamingActive() const = 0;
 	virtual bool RecordingActive() const = 0;
 	virtual bool ReplayBufferActive() const { return false; }
@@ -158,6 +178,7 @@ protected:
 	void ForceZeroBFrames(obs_output_t *output);
 
 private:
+	void CleanupCropResources();
 	void ApplyDegradeTarget(int layers, int bitratePercent);
 	void ApplyDegradeLoss(const char *proto, double unrecoveredPct, double rawPct, double bitrateMbps, double rttMs);
 	void ApplyDegradeReconnect(const char *reason);

@@ -3,6 +3,8 @@
 #include <utility/display-helpers.hpp>
 #include <widgets/OBSBasic.hpp>
 
+#include <cmath>
+
 #include "moc_OBSBasicPreview.cpp"
 
 #define HANDLE_RADIUS 4.0f
@@ -551,6 +553,51 @@ static inline bool PointInRoiOverlay(const vec2 &pos, const vec2 &tl, const vec2
 	return pos.x >= minX && pos.x <= maxX && pos.y >= minY && pos.y <= maxY;
 }
 
+// Returns the crop-overlay handle(s) under pos (ITEM_LEFT/RIGHT/TOP/BOTTOM
+// combined, 0 when not on an edge/corner). tolerance is in canvas units.
+static uint32_t CropHandleAtPos(const vec2 &pos, const vec2 &tl, const vec2 &br, float tolerance)
+{
+	const float minX = std::min(tl.x, br.x), maxX = std::max(tl.x, br.x);
+	const float minY = std::min(tl.y, br.y), maxY = std::max(tl.y, br.y);
+
+	const bool nearLeft = std::fabs(pos.x - minX) <= tolerance;
+	const bool nearRight = std::fabs(pos.x - maxX) <= tolerance;
+	const bool nearTop = std::fabs(pos.y - minY) <= tolerance;
+	const bool nearBottom = std::fabs(pos.y - maxY) <= tolerance;
+	const bool withinX = pos.x >= minX - tolerance && pos.x <= maxX + tolerance;
+	const bool withinY = pos.y >= minY - tolerance && pos.y <= maxY + tolerance;
+
+	uint32_t flags = 0;
+	if (nearLeft && withinY)
+		flags |= ITEM_LEFT;
+	else if (nearRight && withinY)
+		flags |= ITEM_RIGHT;
+	if (nearTop && withinX)
+		flags |= ITEM_TOP;
+	else if (nearBottom && withinX)
+		flags |= ITEM_BOTTOM;
+
+	return flags;
+}
+
+static Qt::CursorShape CropCursorForHandle(uint32_t flags)
+{
+	const bool left = (flags & ITEM_LEFT) != 0;
+	const bool right = (flags & ITEM_RIGHT) != 0;
+	const bool top = (flags & ITEM_TOP) != 0;
+	const bool bottom = (flags & ITEM_BOTTOM) != 0;
+
+	if ((left && top) || (right && bottom))
+		return Qt::SizeFDiagCursor;
+	if ((left && bottom) || (right && top))
+		return Qt::SizeBDiagCursor;
+	if (left || right)
+		return Qt::SizeHorCursor;
+	if (top || bottom)
+		return Qt::SizeVerCursor;
+	return Qt::ArrowCursor;
+}
+
 void OBSBasicPreview::mousePressEvent(QMouseEvent *event)
 {
 	if (roiSelectMode) {
@@ -578,6 +625,27 @@ void OBSBasicPreview::mousePressEvent(QMouseEvent *event)
 			SetRoiSelectMode(false);
 		}
 		return;
+	}
+
+	if (cropOverlayVisible && cropOverlayInteractive && event->button() == Qt::LeftButton) {
+		OBSBasic *main = OBSBasic::Get();
+		vec2 pos = GetMouseEventPos(event);
+		const float tolerance = 8.0f / main->previewScale;
+		const uint32_t handle = CropHandleAtPos(pos, cropOverlayTL, cropOverlayBR, tolerance);
+		const bool inside = PointInRoiOverlay(pos, cropOverlayTL, cropOverlayBR);
+
+		if (handle != 0 || inside) {
+			cropDragging = true;
+			cropDragMoved = false;
+			cropDragMoving = inside && handle == 0;
+			cropDragHandle = handle;
+			cropDragStart = pos;
+			cropDragTL = cropOverlayTL;
+			cropDragBR = cropOverlayBR;
+
+			setCursor(cropDragMoving ? Qt::SizeAllCursor : CropCursorForHandle(handle));
+			return;
+		}
 	}
 
 	QPointF pos = event->position();
@@ -774,6 +842,23 @@ void OBSBasicPreview::mouseReleaseEvent(QMouseEvent *event)
 			emit roiRegionSelected(finalStart.x, finalStart.y, finalEnd.x, finalEnd.y);
 		}
 		SetRoiSelectMode(false);
+		return;
+	}
+
+	if (cropDragging) {
+		if (event->button() == Qt::LeftButton && cropDragMoved) {
+			const float left = std::min(cropOverlayTL.x, cropOverlayBR.x);
+			const float top = std::min(cropOverlayTL.y, cropOverlayBR.y);
+			const float right = std::max(cropOverlayTL.x, cropOverlayBR.x);
+			const float bottom = std::max(cropOverlayTL.y, cropOverlayBR.y);
+			emit cropRegionSelected(left, top, right, bottom);
+		}
+
+		cropDragging = false;
+		cropDragMoved = false;
+		cropDragMoving = false;
+		cropDragHandle = 0;
+		unsetCursor();
 		return;
 	}
 
@@ -1615,6 +1700,61 @@ void OBSBasicPreview::mouseMoveEvent(QMouseEvent *event)
 		return;
 	}
 
+	if (cropOverlayVisible && cropDragging) {
+		vec2 pos = GetMouseEventPos(event);
+		pos.x = std::round(pos.x);
+		pos.y = std::round(pos.y);
+
+		const vec2 canvasSize = GetOBSScreenSize();
+		const float minSize = 8.0f;
+
+		if (cropDragMoving) {
+			const float w = cropDragBR.x - cropDragTL.x;
+			const float h = cropDragBR.y - cropDragTL.y;
+			const float nx = std::clamp(cropDragTL.x + (pos.x - cropDragStart.x), 0.0f,
+						    std::max(0.0f, canvasSize.x - w));
+			const float ny = std::clamp(cropDragTL.y + (pos.y - cropDragStart.y), 0.0f,
+						    std::max(0.0f, canvasSize.y - h));
+
+			vec2_set(&cropOverlayTL, nx, ny);
+			vec2_set(&cropOverlayBR, nx + w, ny + h);
+		} else {
+			float left = cropDragTL.x;
+			float top = cropDragTL.y;
+			float right = cropDragBR.x;
+			float bottom = cropDragBR.y;
+
+			if (cropDragHandle & ITEM_LEFT)
+				left = std::clamp(pos.x, 0.0f, right - minSize);
+			else if (cropDragHandle & ITEM_RIGHT)
+				right = std::clamp(pos.x, left + minSize, canvasSize.x);
+
+			if (cropDragHandle & ITEM_TOP)
+				top = std::clamp(pos.y, 0.0f, bottom - minSize);
+			else if (cropDragHandle & ITEM_BOTTOM)
+				bottom = std::clamp(pos.y, top + minSize, canvasSize.y);
+
+			vec2_set(&cropOverlayTL, left, top);
+			vec2_set(&cropOverlayBR, right, bottom);
+		}
+
+		cropDragMoved = true;
+		return;
+	}
+
+	if (cropOverlayVisible && cropOverlayInteractive && !mouseDown) {
+		OBSBasic *main = OBSBasic::Get();
+		vec2 pos = GetMouseEventPos(event);
+		const float tolerance = 8.0f / main->previewScale;
+		const uint32_t handle = CropHandleAtPos(pos, cropOverlayTL, cropOverlayBR, tolerance);
+		const bool inside = PointInRoiOverlay(pos, cropOverlayTL, cropOverlayBR);
+
+		if (handle != 0 || inside) {
+			setCursor(handle != 0 ? CropCursorForHandle(handle) : Qt::SizeAllCursor);
+			return;
+		}
+	}
+
 	OBSBasic *main = OBSBasic::Get();
 	changed = true;
 
@@ -1741,6 +1881,25 @@ void OBSBasicPreview::SetRoiOverlay(bool visible, float left, float top, float r
 	if (visible) {
 		vec2_set(&roiOverlayTL, left, top);
 		vec2_set(&roiOverlayBR, right, bottom);
+	}
+}
+
+void OBSBasicPreview::SetCropOverlay(bool visible, bool interactive, float left, float top, float right,
+				     float bottom)
+{
+	cropOverlayVisible = visible;
+	cropOverlayInteractive = visible && interactive;
+
+	if (visible) {
+		vec2_set(&cropOverlayTL, std::min(left, right), std::min(top, bottom));
+		vec2_set(&cropOverlayBR, std::max(left, right), std::max(top, bottom));
+	}
+
+	if (!cropOverlayVisible || !cropOverlayInteractive) {
+		cropDragging = false;
+		cropDragMoved = false;
+		cropDragMoving = false;
+		cropDragHandle = 0;
 	}
 }
 
@@ -2326,6 +2485,57 @@ void OBSBasicPreview::DrawSceneEditing()
 		}
 
 		gs_load_vertexbuffer(nullptr);
+	}
+
+	if (cropOverlayVisible) {
+		const float pr = main->GetDevicePixelRatio();
+		const float ps = main->previewScale;
+		const float x1 = cropOverlayTL.x * ps;
+		const float y1 = cropOverlayTL.y * ps;
+		const float x2 = cropOverlayBR.x * ps;
+		const float y2 = cropOverlayBR.y * ps;
+		const float thickness = HANDLE_RADIUS * pr;
+
+		vec4 cropColor;
+		vec4_set(&cropColor, 0.1f, 1.0f, 0.6f, 1.0f);
+
+		gs_matrix_push();
+		gs_matrix_identity();
+
+		gs_eparam_t *stripedColor = gs_effect_get_param_by_name(stripedLineEffect, "color");
+		gs_effect_set_vec4(stripedColor, &cropColor);
+
+		vec2 unitScale;
+		vec2_set(&unitScale, 1.0f, 1.0f);
+		DrawStripedLine(x1, y1, x2, y1, thickness, unitScale);
+		DrawStripedLine(x2, y1, x2, y2, thickness, unitScale);
+		DrawStripedLine(x1, y2, x2, y2, thickness, unitScale);
+		DrawStripedLine(x1, y1, x1, y2, thickness, unitScale);
+
+		gs_eparam_t *handleColor = gs_effect_get_param_by_name(solidEffect, "color");
+		gs_effect_set_vec4(handleColor, &cropColor);
+
+		gs_technique_t *tech = gs_effect_get_technique(solidEffect, "Solid");
+		gs_technique_begin(tech);
+		gs_technique_begin_pass(tech, 0);
+		gs_load_vertexbuffer(main->box);
+
+		const float midX = (x1 + x2) * 0.5f;
+		const float midY = (y1 + y2) * 0.5f;
+		DrawSquareAtPos(x1, y1, pr);
+		DrawSquareAtPos(midX, y1, pr);
+		DrawSquareAtPos(x2, y1, pr);
+		DrawSquareAtPos(x1, midY, pr);
+		DrawSquareAtPos(x2, midY, pr);
+		DrawSquareAtPos(x1, y2, pr);
+		DrawSquareAtPos(midX, y2, pr);
+		DrawSquareAtPos(x2, y2, pr);
+
+		gs_technique_end_pass(tech);
+		gs_technique_end(tech);
+
+		gs_load_vertexbuffer(nullptr);
+		gs_matrix_pop();
 	}
 
 	if (locked)

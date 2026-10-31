@@ -825,6 +825,7 @@ bool AdvancedOutput::StartStreaming(obs_service_t *service)
 	if (obs_output_start(streamOutput)) {
 		if (multitrackVideo && multitrackVideoActive)
 			multitrackVideo->StartedStreaming();
+		StartCropStreaming(service);
 		StartDegrade(service, streamOutput);
 		return true;
 	}
@@ -989,6 +990,7 @@ bool AdvancedOutput::StartReplayBuffer()
 void AdvancedOutput::StopStreaming(bool force)
 {
 	StopDegrade();
+	StopCropStreaming(force);
 
 	auto output = StreamingOutput();
 	if (force && output)

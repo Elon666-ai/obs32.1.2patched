@@ -857,6 +857,14 @@ private:
 	// intentional.
 	void OnRoiRegionSelected(float left, float top, float right, float bottom);
 
+	// Slot for ui->preview's cropRegionSelected signal (canvas/base
+	// coordinates): converts to main-output pixels, writes the
+	// CropStream* settings and saves.
+	void OnCropRegionSelected(float left, float top, float right, float bottom);
+
+	// Refreshes the preview crop overlay from the Video config.
+	void UpdateCropStreamOverlay();
+
 	/* OBS Callbacks */
 	static void RenderMain(void *data, uint32_t cx, uint32_t cy);
 
