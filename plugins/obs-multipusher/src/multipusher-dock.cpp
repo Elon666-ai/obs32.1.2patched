@@ -23,6 +23,35 @@
 #define QSTRING(s) QString::fromStdString(s)
 #define TO_STD(q)   (q).toStdString()
 
+// The Stream combo only exposes the view suffix (fwh / fwv); the full
+// stream name (e.g. "3drush-fwh") is rebuilt from the selected Site combo
+// option. Keep this mapping in one place so changing either combo keeps the
+// persisted siteName correct.
+static std::string SitePrefixForCombo(const QString& site)
+{
+    if (site == "studio_3drush") return "3drush";
+    if (site == "studio_gsp2w") return "gsp2w";
+    return TO_STD(site);
+}
+
+static QString BuildStreamName(const QString& site, const QString& view)
+{
+    std::string v = TO_STD(view);
+    if (v != "fwh" && v != "fwv")
+        v = "fwh";
+    return QString::fromStdString(SitePrefixForCombo(site) + "-" + v);
+}
+
+static void PopulateStreamViews(QComboBox* combo, const QString& current)
+{
+    combo->blockSignals(true);
+    combo->clear();
+    combo->addItems({"fwh", "fwv"});
+    int idx = combo->findText(current);
+    combo->setCurrentIndex(idx >= 0 ? idx : 0);
+    combo->blockSignals(false);
+}
+
 MultipusherDock* MultipusherDock::instance_ = nullptr;
 
 inline MultipusherContext* ctx() { return g_ctx.get(); }
@@ -107,7 +136,7 @@ void MultipusherDock::buildUI() {
     row->addWidget(new QLabel("Stream:"));
     streamNameCombo_ = new QComboBox();
     streamNameCombo_->setMinimumWidth(140);
-    streamNameCombo_->addItems({"3drush-fwh", "3drush-fwv"});
+    streamNameCombo_->addItems({"fwh", "fwv"});
     row->addWidget(streamNameCombo_);
 
     row->addSpacing(12);
@@ -173,34 +202,27 @@ void MultipusherDock::onSiteNameChanged(int index) {
     QString siteName = siteNameCombo_->itemText(index);
     MP_LOG(LOG_INFO, "[obs-multipusher] site changed to: %s", siteName.toUtf8().constData());
 
-    // Repopulate stream dropdown based on site
-    streamNameCombo_->clear();
-    std::string site = TO_STD(siteName);
-    if (site == "studio_3drush") {
-        streamNameCombo_->addItems({"3drush-fwh", "3drush-fwv"});
-    } else if (site == "studio_gsp2w") {
-        streamNameCombo_->addItems({"gsp2w-fwv", "gsp2w-fwh"});
-    } else {
-        streamNameCombo_->addItem(siteName);
-    }
-    streamNameCombo_->setCurrentIndex(0);
+    QString view = streamNameCombo_->currentText();
+    PopulateStreamViews(streamNameCombo_, view);
 
     if (ctx()) {
-        ctx()->config.GetMutable().siteName = TO_STD(streamNameCombo_->currentText());
-        ctx()->ladder.LoadFromConfig(ctx()->config.Get());
+        auto& cfg = ctx()->config.GetMutable();
+        cfg.siteName = TO_STD(BuildStreamName(siteName, streamNameCombo_->currentText()));
+        cfg.input.videoLayout = (streamNameCombo_->currentText() == "fwv") ? "portrait" : "landscape";
+        ctx()->ladder.LoadFromConfig(cfg);
         ctx()->config.Save(ctx()->config.Path());
     }
     refreshStreamTable();
 }
 
 void MultipusherDock::onStreamNameChanged(int index) {
-    QString streamName = streamNameCombo_->itemText(index);
-    MP_LOG(LOG_INFO, "[obs-multipusher] stream changed to: %s", streamName.toUtf8().constData());
+    QString view = streamNameCombo_->itemText(index);
+    MP_LOG(LOG_INFO, "[obs-multipusher] stream changed to: %s", view.toUtf8().constData());
     if (ctx()) {
         auto& cfg = ctx()->config.GetMutable();
-        cfg.siteName = TO_STD(streamName);
+        cfg.siteName = TO_STD(BuildStreamName(siteNameCombo_->currentText(), view));
         // Auto-detect video layout from stream name suffix: fwv→portrait, fwh→landscape
-        std::string name = TO_STD(streamName);
+        std::string name = TO_STD(view);
         std::string lower = Utils::ToLower(name);
         cfg.input.videoLayout = (lower.find("fwv") != std::string::npos) ? "portrait" : "landscape";
         ctx()->ladder.LoadFromConfig(cfg);
@@ -221,26 +243,21 @@ void MultipusherDock::applyConfigToUI() {
     auto& cfg = ctx()->config.GetMutable();
 
     std::string siteName = StreamLadder::SiteNameForStream(cfg.siteName);
+    if (siteName.empty())
+        siteName = "studio_3drush";
 
     siteNameCombo_->blockSignals(true);
     int siteIdx = siteNameCombo_->findText(QSTRING(siteName));
-    if (siteIdx >= 0) siteNameCombo_->setCurrentIndex(siteIdx);
-    else siteNameCombo_->setCurrentText(QSTRING(siteName));
+    if (siteIdx >= 0) {
+        siteNameCombo_->setCurrentIndex(siteIdx);
+    } else {
+        siteNameCombo_->addItem(QSTRING(siteName));
+        siteNameCombo_->setCurrentIndex(siteNameCombo_->count() - 1);
+    }
     siteNameCombo_->blockSignals(false);
 
-    // Repopulate stream combo to match the resolved site before setting index.
-    streamNameCombo_->blockSignals(true);
-    streamNameCombo_->clear();
-    if (siteName == "studio_3drush")
-        streamNameCombo_->addItems({"3drush-fwh", "3drush-fwv"});
-    else if (siteName == "studio_gsp2w")
-        streamNameCombo_->addItems({"gsp2w-fwv", "gsp2w-fwh"});
-    else
-        streamNameCombo_->addItem(QSTRING(cfg.siteName));
-    int streamIdx = streamNameCombo_->findText(QSTRING(cfg.siteName));
-    if (streamIdx >= 0) streamNameCombo_->setCurrentIndex(streamIdx);
-    else streamNameCombo_->setCurrentText(QSTRING(cfg.siteName));
-    streamNameCombo_->blockSignals(false);
+    // The stream combo only shows the view suffix (fwh / fwv), never empty.
+    PopulateStreamViews(streamNameCombo_, QSTRING(StreamLadder::ViewNameForStream(cfg.siteName)));
 
     loadIntervalToUI();
 }
@@ -248,7 +265,8 @@ void MultipusherDock::applyConfigToUI() {
 void MultipusherDock::readUItoConfig() {
     if (!ctx()) return;
     auto& cfg = ctx()->config.GetMutable();
-    cfg.siteName = TO_STD(streamNameCombo_->currentText());
+    cfg.siteName = TO_STD(BuildStreamName(siteNameCombo_->currentText(), streamNameCombo_->currentText()));
+    cfg.input.videoLayout = (streamNameCombo_->currentText() == "fwv") ? "portrait" : "landscape";
     // Only update the ladder for table display, don't reconfigure outputs
     ctx()->ladder.LoadFromConfig(cfg);
 }
