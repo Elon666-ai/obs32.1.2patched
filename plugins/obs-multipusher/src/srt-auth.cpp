@@ -282,6 +282,29 @@ const std::map<std::string, std::string>& EnvValues() {
     return values;
 }
 
+// .env TX keys are stored scrambled: random padding characters are inserted
+// at 1-based positions 1, 6, 7 and 8. Strip those four characters before the
+// key is used. Environment variables (as opposed to .env entries) are read
+// verbatim and are not scrambled.
+std::string UnscrambleEnvKey(const std::string& value, const char* name) {
+    if (value.size() < 8) {
+        blog(LOG_WARNING,
+             "[obs-multipusher] %s in .env is too short to be scrambled; ignoring",
+             name);
+        return std::string();
+    }
+
+    std::string out;
+    out.reserve(value.size() - 4);
+    for (size_t i = 0; i < value.size(); ++i) {
+        size_t pos = i + 1;
+        if (pos == 1 || pos == 6 || pos == 7 || pos == 8)
+            continue;
+        out.push_back(value[i]);
+    }
+    return out;
+}
+
 } // namespace
 
 namespace SrtAuth {
@@ -297,7 +320,7 @@ std::string GetPublishKey(bool backup) {
     const auto& values = EnvValues();
     auto it = values.find(name);
     if (it != values.end() && !it->second.empty())
-        return it->second;
+        return UnscrambleEnvKey(it->second, name);
 
     return std::string();
 }
