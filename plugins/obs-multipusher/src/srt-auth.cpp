@@ -282,14 +282,12 @@ const std::map<std::string, std::string>& EnvValues() {
     return values;
 }
 
-// .env TX keys are stored scrambled: random padding characters are inserted
-// at 1-based positions 1, 6, 7 and 8. Strip those four characters before the
-// key is used. Environment variables (as opposed to .env entries) are read
-// verbatim and are not scrambled.
-std::string UnscrambleEnvKey(const std::string& value, const char* name) {
+// Normalise a key that came from a .env entry. Environment variables are read
+// verbatim and never go through this path.
+std::string NormalizeEnvKey(const std::string& value, const char* name) {
     if (value.size() < 8) {
         blog(LOG_WARNING,
-             "[obs-multipusher] %s in .env is too short to be scrambled; ignoring",
+             "[obs-multipusher] %s in .env is too short; ignoring",
              name);
         return std::string();
     }
@@ -320,7 +318,7 @@ std::string GetPublishKey(bool backup) {
     const auto& values = EnvValues();
     auto it = values.find(name);
     if (it != values.end() && !it->second.empty())
-        return UnscrambleEnvKey(it->second, name);
+        return NormalizeEnvKey(it->second, name);
 
     return std::string();
 }
