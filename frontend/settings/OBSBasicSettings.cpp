@@ -29,6 +29,7 @@
 #endif
 #include <utility/audio-encoders.hpp>
 #include <utility/BaseLexer.hpp>
+#include <utility/BasicOutputHandler.hpp>
 #include <utility/FFmpegCodec.hpp>
 #include <utility/FFmpegFormat.hpp>
 #include <utility/SettingsEventFilter.hpp>
@@ -42,10 +43,12 @@
 #include <qt-wrappers.hpp>
 
 #include <QCompleter>
+#include <QSignalBlocker>
 #include <QStandardItemModel>
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <sstream>
 
 #include "moc_OBSBasicSettings.cpp"
@@ -66,6 +69,40 @@ static inline bool ResTooHigh(uint32_t cx, uint32_t cy)
 static inline bool ResTooLow(uint32_t cx, uint32_t cy)
 {
 	return cx < 32 || cy < 32;
+}
+
+/* Crop stream / manual ROI rectangles are stored in output pixels. When the
+ * output resolution changes, scale them proportionally so the same framing is
+ * kept at the new resolution. */
+static void ClampEncoderBitrateSettings(obs_data_t *settings, int maxKbps)
+{
+	if (!settings)
+		return;
+
+	static const char *keys[] = {"bitrate", "max_bitrate", "maxrate", "vbv-maxrate"};
+	for (const char *key : keys) {
+		if ((int)obs_data_get_int(settings, key) > maxKbps)
+			obs_data_set_int(settings, key, maxKbps);
+	}
+}
+
+static void ScaleRectForOutput(int &x, int &y, int &w, int &h, uint32_t oldWidth, uint32_t oldHeight,
+			       uint32_t newWidth, uint32_t newHeight)
+{
+	if (oldWidth && oldHeight && newWidth && newHeight &&
+	    (oldWidth != newWidth || oldHeight != newHeight)) {
+		const double scaleX = (double)newWidth / (double)oldWidth;
+		const double scaleY = (double)newHeight / (double)oldHeight;
+		x = (int)std::lround((double)x * scaleX);
+		y = (int)std::lround((double)y * scaleY);
+		w = (int)std::lround((double)w * scaleX);
+		h = (int)std::lround((double)h * scaleY);
+	}
+
+	x = std::clamp(x, 0, (int)newWidth - 1);
+	y = std::clamp(y, 0, (int)newHeight - 1);
+	w = std::clamp(w, 1, (int)newWidth - x);
+	h = std::clamp(h, 1, (int)newHeight - y);
 }
 
 /* parses "[width]x[height]", string, i.e. 1024x768 */
@@ -1662,25 +1699,15 @@ void OBSBasicSettings::LoadResolutionLists()
 			ui->baseResolution->addItem(res);
 	};
 
-	for (QScreen *screen : QGuiApplication::screens()) {
-		QSize as = screen->size();
-		uint32_t as_width = as.width();
-		uint32_t as_height = as.height();
-
-		// Calculate physical screen resolution based on the virtual screen resolution
-		// They might differ if scaling is enabled, e.g. for HiDPI screens
-		as_width = round(as_width * screen->devicePixelRatio());
-		as_height = round(as_height * screen->devicePixelRatio());
-
-		addRes(as_width, as_height);
-	}
-
+	addRes(3840, 2160);
+	addRes(2560, 1440);
 	addRes(1920, 1080);
 	addRes(1280, 720);
 
 	string outputResString = ResString(out_cx, out_cy);
 
 	ui->baseResolution->lineEdit()->setText(ResString(cx, cy).c_str());
+	lastBaseResolutionText = ui->baseResolution->lineEdit()->text();
 
 	RecalcOutputResPixels(outputResString.c_str());
 	ResetDownscales(cx, cy);
@@ -1732,6 +1759,43 @@ void OBSBasicSettings::LoadFPSData()
 	ui->fpsTypes->setCurrentIndex(fpsType);
 }
 
+void OBSBasicSettings::ApplyResolutionFpsCap()
+{
+	uint32_t baseCX = 0, baseCY = 0;
+	uint32_t outCX = 0, outCY = 0;
+	const bool haveBase = ConvertResText(QT_TO_UTF8(ui->baseResolution->currentText()), baseCX, baseCY);
+	const bool haveOut = ConvertResText(QT_TO_UTF8(ui->outputResolution->currentText()), outCX, outCY);
+
+	const bool baseHigh = haveBase && std::min(baseCX, baseCY) >= 1440;
+	const bool outHigh = haveOut && std::min(outCX, outCY) >= 1440;
+	if (!baseHigh && !outHigh)
+		return;
+
+	QSignalBlocker blockType(ui->fpsType);
+	QSignalBlocker blockTypes(ui->fpsTypes);
+	QSignalBlocker blockCommon(ui->fpsCommon);
+	QSignalBlocker blockInteger(ui->fpsInteger);
+	QSignalBlocker blockNumerator(ui->fpsNumerator);
+	QSignalBlocker blockDenominator(ui->fpsDenominator);
+
+	ui->fpsType->setCurrentIndex(0);
+	ui->fpsTypes->setCurrentIndex(0);
+	SetComboByName(ui->fpsCommon, "30");
+	ui->fpsInteger->setValue(30);
+	ui->fpsNumerator->setValue(30);
+	ui->fpsDenominator->setValue(1);
+
+	if (!loading) {
+		ui->fpsType->setProperty("changed", true);
+		ui->fpsCommon->setProperty("changed", true);
+		ui->fpsInteger->setProperty("changed", true);
+		ui->fpsNumerator->setProperty("changed", true);
+		ui->fpsDenominator->setProperty("changed", true);
+		videoChanged = true;
+		EnableApplyButton(true);
+	}
+}
+
 void OBSBasicSettings::LoadVideoSettings()
 {
 	loading = true;
@@ -1743,6 +1807,7 @@ void OBSBasicSettings::LoadVideoSettings()
 
 	LoadResolutionLists();
 	LoadFPSData();
+	ApplyResolutionFpsCap();
 	LoadDownscaleFilters();
 
 	ui->temporalDenoiseEnable->setChecked(config_get_bool(main->Config(), "Video", "TemporalDenoise"));
@@ -1754,29 +1819,22 @@ void OBSBasicSettings::LoadVideoSettings()
 	// Manual ROI is independent of which service/protocol is selected on
 	// the Stream page (see WHIPOutput::ApplyRoi(), which is the only
 	// consumer, but reads it off the output rather than any service).
-	int64_t roiLeft = config_get_int(main->Config(), "Video", "RoiLeft");
-	int64_t roiTop = config_get_int(main->Config(), "Video", "RoiTop");
-	int64_t roiRight = config_get_int(main->Config(), "Video", "RoiRight");
-	int64_t roiBottom = config_get_int(main->Config(), "Video", "RoiBottom");
-
-	if (roiRight <= roiLeft || roiBottom <= roiTop) {
-		// No valid rectangle saved yet - prefill a generic centered box
-		// as a starting point to drag/resize from, rather than leaving
-		// a zero-size rectangle.
-		uint32_t outputWidth, outputHeight;
-		GetWHIPSimulcastMainResolution(outputWidth, outputHeight);
-
-		roiLeft = outputWidth * 25 / 100;
-		roiTop = outputHeight * 10 / 100;
-		roiRight = outputWidth * 75 / 100;
-		roiBottom = outputHeight * 90 / 100;
+	uint32_t roiOutWidth, roiOutHeight;
+	GetWHIPSimulcastMainResolution(roiOutWidth, roiOutHeight);
+	if (!roiOutWidth || !roiOutHeight) {
+		roiOutWidth = video_output_get_width(obs_get_video());
+		roiOutHeight = video_output_get_height(obs_get_video());
 	}
 
+	int roiLeft, roiTop, roiRight, roiBottom;
+	main->GetManualRoiRect(roiLeft, roiTop, roiRight, roiBottom, roiOutWidth, roiOutHeight);
+	main->SetManualRoiRect(roiLeft, roiTop, roiRight, roiBottom, roiOutWidth, roiOutHeight);
+
 	ui->manualRoiGroupBox->setChecked(config_get_bool(main->Config(), "Video", "RoiEnabled"));
-	ui->roiLeft->setValue((int)roiLeft);
-	ui->roiTop->setValue((int)roiTop);
-	ui->roiRight->setValue((int)roiRight);
-	ui->roiBottom->setValue((int)roiBottom);
+	ui->roiLeft->setValue(roiLeft);
+	ui->roiTop->setValue(roiTop);
+	ui->roiRight->setValue(roiRight);
+	ui->roiBottom->setValue(roiBottom);
 
 	// roi_priority/roi_bg_priority are libobs encoder-ROI priority values
 	// (-1..1, see obs-encoder.h), which x264/NVENC convert to a
@@ -1792,35 +1850,22 @@ void OBSBasicSettings::LoadVideoSettings()
 
 	// Crop stream output (Settings > Video > General). Coordinates are in
 	// main-output pixels, same convention as the manual ROI rectangle.
-	obs_video_info cropOvi;
-	const bool haveCropVideo = obs_get_video_info(&cropOvi);
-	const uint32_t cropOutW = haveCropVideo ? video_output_get_width(obs_get_video()) : 0;
-	const uint32_t cropOutH = haveCropVideo ? video_output_get_height(obs_get_video()) : 0;
-
-	int64_t cropX = config_get_int(main->Config(), "Video", "CropStreamX");
-	int64_t cropY = config_get_int(main->Config(), "Video", "CropStreamY");
-	int64_t cropW = config_get_int(main->Config(), "Video", "CropStreamWidth");
-	int64_t cropH = config_get_int(main->Config(), "Video", "CropStreamHeight");
-
-	if (cropOutW && cropOutH) {
-		if (cropW <= 0 || cropH <= 0) {
-			cropW = cropOutW / 2;
-			cropH = cropOutH / 2;
-			cropX = (cropOutW - cropW) / 2;
-			cropY = (cropOutH - cropH) / 2;
-		}
-
-		cropW = std::clamp<int64_t>(cropW, 1, cropOutW);
-		cropH = std::clamp<int64_t>(cropH, 1, cropOutH);
-		cropX = std::clamp<int64_t>(cropX, 0, cropOutW - cropW);
-		cropY = std::clamp<int64_t>(cropY, 0, cropOutH - cropH);
+	uint32_t cropOutW, cropOutH;
+	GetWHIPSimulcastMainResolution(cropOutW, cropOutH);
+	if (!cropOutW || !cropOutH) {
+		cropOutW = video_output_get_width(obs_get_video());
+		cropOutH = video_output_get_height(obs_get_video());
 	}
 
+	int cropX, cropY, cropW, cropH;
+	main->GetCropStreamRect(cropX, cropY, cropW, cropH, cropOutW, cropOutH);
+	main->SetCropStreamRect(cropX, cropY, cropW, cropH, cropOutW, cropOutH);
+
 	ui->cropStreamGroupBox->setChecked(config_get_bool(main->Config(), "Video", "CropStreamEnabled"));
-	ui->cropStreamX->setValue((int)cropX);
-	ui->cropStreamY->setValue((int)cropY);
-	ui->cropStreamWidth->setValue((int)cropW);
-	ui->cropStreamHeight->setValue((int)cropH);
+	ui->cropStreamX->setValue(cropX);
+	ui->cropStreamY->setValue(cropY);
+	ui->cropStreamWidth->setValue(cropW);
+	ui->cropStreamHeight->setValue(cropH);
 
 	int64_t cropFps = config_get_int(main->Config(), "Video", "CropStreamFPS");
 	ui->cropStreamFPS->setValue((int)std::clamp<int64_t>(cropFps, 1, 120));
@@ -3345,6 +3390,36 @@ void OBSBasicSettings::SaveVideoSettings()
 	int fpsType = ui->fpsType->currentIndex();
 	uint32_t cx = 0, cy = 0;
 
+	const uint32_t oldOutCX = config_get_uint(main->Config(), "Video", "OutputCX");
+	const uint32_t oldOutCY = config_get_uint(main->Config(), "Video", "OutputCY");
+	uint32_t newOutCX = oldOutCX, newOutCY = oldOutCY;
+	uint32_t parsedOutCX = 0, parsedOutCY = 0;
+	if (ConvertResText(QT_TO_UTF8(outputResolution), parsedOutCX, parsedOutCY) && parsedOutCX &&
+	    parsedOutCY) {
+		newOutCX = parsedOutCX;
+		newOutCY = parsedOutCY;
+	}
+
+	uint32_t newBaseCX = config_get_uint(main->Config(), "Video", "BaseCX");
+	uint32_t newBaseCY = config_get_uint(main->Config(), "Video", "BaseCY");
+	uint32_t parsedBaseCX = 0, parsedBaseCY = 0;
+	if (ConvertResText(QT_TO_UTF8(baseResolution), parsedBaseCX, parsedBaseCY) && parsedBaseCX &&
+	    parsedBaseCY) {
+		newBaseCX = parsedBaseCX;
+		newBaseCY = parsedBaseCY;
+	}
+
+	// Video bitrate is tied to the output resolution.
+	const int linkedBitrate = GetLinkedVideoBitrate(newOutCX, newOutCY);
+	config_set_int(main->Config(), "SimpleOutput", "VBitrate", linkedBitrate);
+	config_set_int(main->Config(), "AdvOut", "FFVBitrate", linkedBitrate);
+	if (ui->simpleOutputVBitrate) {
+		QSignalBlocker block(ui->simpleOutputVBitrate);
+		ui->simpleOutputVBitrate->setValue(linkedBitrate);
+	}
+	if (streamEncoderProps)
+		ApplyLinkedVideoBitrate(streamEncoderProps->GetSettings(), newOutCX, newOutCY);
+
 	/* ------------------- */
 
 	if (WidgetChanged(ui->baseResolution) && ConvertResText(QT_TO_UTF8(baseResolution), cx, cy)) {
@@ -3357,13 +3432,38 @@ void OBSBasicSettings::SaveVideoSettings()
 		config_set_uint(main->Config(), "Video", "OutputCY", cy);
 	}
 
-	if (WidgetChanged(ui->fpsType))
-		config_set_uint(main->Config(), "Video", "FPSType", fpsType);
+	// 4K and 1440p are capped at 30 fps (orientation-independent).
+	const bool capFps = std::min(newBaseCX, newBaseCY) >= 1440 || std::min(newOutCX, newOutCY) >= 1440;
+	if (capFps) {
+		fpsType = 0;
+		config_set_uint(main->Config(), "Video", "FPSType", 0);
+		config_set_string(main->Config(), "Video", "FPSCommon", "30");
+		config_set_uint(main->Config(), "Video", "FPSInt", 30);
+		config_set_uint(main->Config(), "Video", "FPSNum", 30);
+		config_set_uint(main->Config(), "Video", "FPSDen", 1);
+		{
+			QSignalBlocker b1(ui->fpsType);
+			QSignalBlocker b2(ui->fpsTypes);
+			QSignalBlocker b3(ui->fpsCommon);
+			QSignalBlocker b4(ui->fpsInteger);
+			QSignalBlocker b5(ui->fpsNumerator);
+			QSignalBlocker b6(ui->fpsDenominator);
+			ui->fpsType->setCurrentIndex(0);
+			ui->fpsTypes->setCurrentIndex(0);
+			SetComboByName(ui->fpsCommon, "30");
+			ui->fpsInteger->setValue(30);
+			ui->fpsNumerator->setValue(30);
+			ui->fpsDenominator->setValue(1);
+		}
+	} else {
+		if (WidgetChanged(ui->fpsType))
+			config_set_uint(main->Config(), "Video", "FPSType", fpsType);
 
-	SaveCombo(ui->fpsCommon, "Video", "FPSCommon");
-	SaveSpinBox(ui->fpsInteger, "Video", "FPSInt");
-	SaveSpinBox(ui->fpsNumerator, "Video", "FPSNum");
-	SaveSpinBox(ui->fpsDenominator, "Video", "FPSDen");
+		SaveCombo(ui->fpsCommon, "Video", "FPSCommon");
+		SaveSpinBox(ui->fpsInteger, "Video", "FPSInt");
+		SaveSpinBox(ui->fpsNumerator, "Video", "FPSNum");
+		SaveSpinBox(ui->fpsDenominator, "Video", "FPSDen");
+	}
 	SaveComboData(ui->downscaleFilter, "Video", "ScaleType");
 
 	SaveCheckBox(ui->temporalDenoiseEnable, "Video", "TemporalDenoise");
@@ -3380,10 +3480,26 @@ void OBSBasicSettings::SaveVideoSettings()
 	// enabled. Independent of which service/protocol is selected.
 	if (WidgetChanged(ui->manualRoiGroupBox))
 		config_set_bool(main->Config(), "Video", "RoiEnabled", ui->manualRoiGroupBox->isChecked());
-	SaveSpinBox(ui->roiLeft, "Video", "RoiLeft");
-	SaveSpinBox(ui->roiTop, "Video", "RoiTop");
-	SaveSpinBox(ui->roiRight, "Video", "RoiRight");
-	SaveSpinBox(ui->roiBottom, "Video", "RoiBottom");
+
+	int roiLeft = ui->roiLeft->value();
+	int roiTop = ui->roiTop->value();
+	int roiW = ui->roiRight->value() - roiLeft;
+	int roiH = ui->roiBottom->value() - roiTop;
+	if (newOutCX && newOutCY && roiW > 0 && roiH > 0)
+		ScaleRectForOutput(roiLeft, roiTop, roiW, roiH, oldOutCX, oldOutCY, newOutCX, newOutCY);
+	const int roiRight = roiLeft + roiW;
+	const int roiBottom = roiTop + roiH;
+	main->SetManualRoiRect(roiLeft, roiTop, roiRight, roiBottom, newOutCX, newOutCY);
+	{
+		QSignalBlocker b1(ui->roiLeft);
+		QSignalBlocker b2(ui->roiTop);
+		QSignalBlocker b3(ui->roiRight);
+		QSignalBlocker b4(ui->roiBottom);
+		ui->roiLeft->setValue(roiLeft);
+		ui->roiTop->setValue(roiTop);
+		ui->roiRight->setValue(roiRight);
+		ui->roiBottom->setValue(roiBottom);
+	}
 	SaveSpinBox(ui->roiPriority, "Video", "RoiPriority");
 	SaveSpinBox(ui->roiBgPriority, "Video", "RoiBgPriority");
 
@@ -3393,10 +3509,31 @@ void OBSBasicSettings::SaveVideoSettings()
 	// toggle the group box without editing those prefilled spin boxes.
 	if (WidgetChanged(ui->cropStreamGroupBox))
 		config_set_bool(main->Config(), "Video", "CropStreamEnabled", ui->cropStreamGroupBox->isChecked());
-	config_set_int(main->Config(), "Video", "CropStreamX", ui->cropStreamX->value());
-	config_set_int(main->Config(), "Video", "CropStreamY", ui->cropStreamY->value());
-	config_set_int(main->Config(), "Video", "CropStreamWidth", ui->cropStreamWidth->value());
-	config_set_int(main->Config(), "Video", "CropStreamHeight", ui->cropStreamHeight->value());
+
+	int cropX = ui->cropStreamX->value();
+	int cropY = ui->cropStreamY->value();
+	int cropW = ui->cropStreamWidth->value();
+	int cropH = ui->cropStreamHeight->value();
+	if (newOutCX && newOutCY) {
+		ScaleRectForOutput(cropX, cropY, cropW, cropH, oldOutCX, oldOutCY, newOutCX, newOutCY);
+		cropW &= ~1;
+		cropH &= ~1;
+		if (cropW < 2)
+			cropW = 2;
+		if (cropH < 2)
+			cropH = 2;
+	}
+	main->SetCropStreamRect(cropX, cropY, cropW, cropH, newOutCX, newOutCY);
+	{
+		QSignalBlocker b1(ui->cropStreamX);
+		QSignalBlocker b2(ui->cropStreamY);
+		QSignalBlocker b3(ui->cropStreamWidth);
+		QSignalBlocker b4(ui->cropStreamHeight);
+		ui->cropStreamX->setValue(cropX);
+		ui->cropStreamY->setValue(cropY);
+		ui->cropStreamWidth->setValue(cropW);
+		ui->cropStreamHeight->setValue(cropH);
+	}
 	config_set_int(main->Config(), "Video", "CropStreamFPS", ui->cropStreamFPS->value());
 	main->UpdateRoiSelectButton();
 }
@@ -3636,6 +3773,17 @@ void OBSBasicSettings::SaveOutputSettings()
 		presetType = "Preset";
 
 	SaveSpinBox(ui->simpleOutputVBitrate, "SimpleOutput", "VBitrate");
+	const bool cappedProtocol = IsWHIP() || IsSRT() || IsERTMP();
+	if (cappedProtocol) {
+		constexpr int kMaxVideoBitrateKbps = 10000;
+		if (ui->simpleOutputVBitrate->value() > kMaxVideoBitrateKbps) {
+			config_set_int(main->Config(), "SimpleOutput", "VBitrate", kMaxVideoBitrateKbps);
+			QSignalBlocker block(ui->simpleOutputVBitrate);
+			ui->simpleOutputVBitrate->setValue(kMaxVideoBitrateKbps);
+		}
+		if (streamEncoderProps)
+			ClampEncoderBitrateSettings(streamEncoderProps->GetSettings(), kMaxVideoBitrateKbps);
+	}
 	SaveComboData(ui->simpleOutStrEncoder, "SimpleOutput", "StreamEncoder");
 	SaveComboData(ui->simpleOutStrAEncoder, "SimpleOutput", "StreamAudioEncoder");
 	SaveCombo(ui->simpleOutputABitrate, "SimpleOutput", "ABitrate");
@@ -4431,7 +4579,31 @@ void OBSBasicSettings::on_baseResolution_editTextChanged(const QString &text)
 			QTStr("AspectRatio")
 				.arg(QString::number(std::get<0>(aspect)), QString::number(std::get<1>(aspect))));
 
+		// Output follows the canvas while it still matches the previous
+		// canvas size. Once the user manually picked a different output
+		// resolution, preserve that choice across canvas changes.
+		const QString previousOutput = ui->outputResolution->currentText();
+		const bool followsBase = previousOutput == lastBaseResolutionText;
+		const QString desiredOutput = followsBase ? baseResolution : previousOutput;
+		lastBaseResolutionText = baseResolution;
+
+		if (followsBase)
+			RecalcOutputResPixels(QT_TO_UTF8(baseResolution));
+
 		ResetDownscales(cx, cy);
+
+		// ResetDownscales may choose a closest sibling based on the old
+		// output; force the follow/manual result explicitly.
+		{
+			QSignalBlocker block(ui->outputResolution);
+			ui->outputResolution->lineEdit()->setText(desiredOutput);
+		}
+		RecalcOutputResPixels(QT_TO_UTF8(desiredOutput));
+		LoadDownscaleFilters();
+
+		ui->outputResolution->setProperty("changed", QVariant(true));
+		videoChanged = true;
+		EnableApplyButton(true);
 	}
 }
 
@@ -4611,6 +4783,7 @@ void OBSBasicSettings::VideoChangedResolution()
 		videoChanged = true;
 		sender()->setProperty("changed", QVariant(true));
 		EnableApplyButton(true);
+		ApplyResolutionFpsCap();
 	}
 }
 

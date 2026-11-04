@@ -268,7 +268,8 @@ void SimpleOutput::Update()
 	OBSDataAutoRelease videoSettings = obs_data_create();
 	OBSDataAutoRelease audioSettings = obs_data_create();
 
-	int videoBitrate = config_get_uint(main->Config(), "SimpleOutput", "VBitrate");
+	video_t *video = obs_get_video();
+	int videoBitrate = GetLinkedVideoBitrate(video_output_get_width(video), video_output_get_height(video));
 	int audioBitrate = GetAudioBitrate();
 	bool advanced = config_get_bool(main->Config(), "SimpleOutput", "UseAdvanced");
 	bool enforceBitrate = !config_get_bool(main->Config(), "Stream1", "IgnoreRecommended");
@@ -320,7 +321,7 @@ void SimpleOutput::Update()
 	}
 
 	obs_data_set_string(videoSettings, "rate_control", "CBR");
-	obs_data_set_int(videoSettings, "bitrate", videoBitrate);
+	ApplyLinkedVideoBitrate(videoSettings, video_output_get_width(video), video_output_get_height(video));
 
 	if (advanced)
 		obs_data_set_string(videoSettings, "x264opts", custom);
@@ -349,7 +350,8 @@ void SimpleOutput::Update()
 		obs_data_set_int(audioSettings, "bitrate", audioBitrate);
 	}
 
-	video_t *video = obs_get_video();
+	ClampStreamBitrateForProtocol(main->GetService(), videoSettings);
+
 	enum video_format format = video_output_get_format(video);
 
 	switch (format) {
@@ -370,7 +372,7 @@ void SimpleOutput::Update()
 	obs_encoder_update(audioArchive, audioSettings);
 
 	if (whipSimulcastEncoders != nullptr) {
-		whipSimulcastEncoders->Update(videoSettings, videoBitrate);
+		whipSimulcastEncoders->Update(videoSettings, (int)obs_data_get_int(videoSettings, "bitrate"));
 	}
 }
 

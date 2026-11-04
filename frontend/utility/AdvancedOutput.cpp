@@ -238,6 +238,9 @@ void AdvancedOutput::UpdateStreamSettings()
 	OBSData settings = GetEncoderSettings("streamEncoder", streamEncoder);
 	ApplyEncoderDefaults(settings, videoStreaming);
 
+	video_t *video = obs_get_video();
+	ApplyLinkedVideoBitrate(settings, video_output_get_width(video), video_output_get_height(video));
+
 	if (applyServiceSettings) {
 		int bitrate = (int)obs_data_get_int(settings, "bitrate");
 		int keyint_sec = (int)obs_data_get_int(settings, "keyint_sec");
@@ -269,10 +272,11 @@ void AdvancedOutput::UpdateStreamSettings()
 		blog(LOG_WARNING, "User is ignoring service settings.");
 	}
 
+	ClampStreamBitrateForProtocol(main->GetService(), settings);
+
 	if (dynBitrate && strstr(streamEncoder, "nvenc") != nullptr)
 		obs_data_set_bool(settings, "lookahead", false);
 
-	video_t *video = obs_get_video();
 	enum video_format format = video_output_get_format(video);
 
 	switch (format) {
@@ -352,6 +356,7 @@ inline void AdvancedOutput::SetupStreaming()
 	if (strcmp(id, "rtmp_custom") == 0) {
 		OBSDataAutoRelease settings = obs_data_create();
 		obs_service_apply_encoder_settings(main->GetService(), settings, nullptr);
+		ClampStreamBitrateForProtocol(main->GetService(), settings);
 		obs_encoder_update(videoStreaming, settings);
 	}
 }
@@ -732,10 +737,10 @@ bool AdvancedOutput::StartStreaming(obs_service_t *service)
 	bool detectRoi = config_get_bool(main->Config(), "Video", "DetectRoi");
 	bool qualityScore = config_get_bool(main->Config(), "Video", "QualityScore");
 	bool roiEnabled = config_get_bool(main->Config(), "Video", "RoiEnabled");
-	int roiLeft = config_get_int(main->Config(), "Video", "RoiLeft");
-	int roiTop = config_get_int(main->Config(), "Video", "RoiTop");
-	int roiRight = config_get_int(main->Config(), "Video", "RoiRight");
-	int roiBottom = config_get_int(main->Config(), "Video", "RoiBottom");
+	uint32_t roiOutWidth = video_output_get_width(obs_get_video());
+	uint32_t roiOutHeight = video_output_get_height(obs_get_video());
+	int roiLeft, roiTop, roiRight, roiBottom;
+	main->GetManualRoiRect(roiLeft, roiTop, roiRight, roiBottom, roiOutWidth, roiOutHeight);
 	int roiPriority = config_get_int(main->Config(), "Video", "RoiPriority");
 	int roiBgPriority = config_get_int(main->Config(), "Video", "RoiBgPriority");
 	bool useDelay = config_get_bool(main->Config(), "Output", "DelayEnable");

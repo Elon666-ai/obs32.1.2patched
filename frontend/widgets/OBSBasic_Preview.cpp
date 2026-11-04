@@ -27,6 +27,7 @@
 #include <QColorDialog>
 
 #include <algorithm>
+#include <cmath>
 #include <sstream>
 
 extern void undo_redo(const std::string &data);
@@ -762,15 +763,14 @@ void OBSBasic::UpdateRoiSelectButton()
 	// configured" indicator, still useful to check mid-stream if the
 	// camera framing shifted.
 	bool roiEnabled = config_get_bool(Config(), "Video", "RoiEnabled");
-	int roiLeft = config_get_int(Config(), "Video", "RoiLeft");
-	int roiTop = config_get_int(Config(), "Video", "RoiTop");
-	int roiRight = config_get_int(Config(), "Video", "RoiRight");
-	int roiBottom = config_get_int(Config(), "Video", "RoiBottom");
 
 	obs_video_info ovi;
 	const bool haveVideo = obs_get_video_info(&ovi) && ovi.base_width && ovi.base_height;
 	const uint32_t outputWidth = haveVideo ? video_output_get_width(obs_get_video()) : 0;
 	const uint32_t outputHeight = haveVideo ? video_output_get_height(obs_get_video()) : 0;
+
+	int roiLeft, roiTop, roiRight, roiBottom;
+	GetManualRoiRect(roiLeft, roiTop, roiRight, roiBottom, outputWidth, outputHeight);
 
 	if (roiEnabled && haveVideo && outputWidth && outputHeight && roiRight > roiLeft && roiBottom > roiTop) {
 		// Inverse of the canvas -> output scaling in OnRoiRegionSelected().
@@ -786,6 +786,125 @@ void OBSBasic::UpdateRoiSelectButton()
 	UpdateCropStreamOverlay();
 }
 
+static void ScaleOutputRect(int &x, int &y, int &w, int &h, uint32_t oldWidth, uint32_t oldHeight,
+			    uint32_t newWidth, uint32_t newHeight)
+{
+	if (oldWidth && oldHeight && (oldWidth != newWidth || oldHeight != newHeight)) {
+		const double scaleX = (double)newWidth / (double)oldWidth;
+		const double scaleY = (double)newHeight / (double)oldHeight;
+		x = (int)std::lround((double)x * scaleX);
+		y = (int)std::lround((double)y * scaleY);
+		w = (int)std::lround((double)w * scaleX);
+		h = (int)std::lround((double)h * scaleY);
+	}
+
+	x = std::clamp(x, 0, (int)newWidth - 1);
+	y = std::clamp(y, 0, (int)newHeight - 1);
+	w = std::clamp(w, 1, (int)newWidth - x);
+	h = std::clamp(h, 1, (int)newHeight - y);
+}
+
+void OBSBasic::GetCropStreamRect(int &x, int &y, int &w, int &h, uint32_t outputWidth,
+				 uint32_t outputHeight)
+{
+	if (!outputWidth || !outputHeight) {
+		x = y = w = h = 0;
+		return;
+	}
+
+	x = config_get_int(Config(), "Video", "CropStreamX");
+	y = config_get_int(Config(), "Video", "CropStreamY");
+	w = config_get_int(Config(), "Video", "CropStreamWidth");
+	h = config_get_int(Config(), "Video", "CropStreamHeight");
+
+	if (w <= 0 || h <= 0) {
+		w = (int)outputWidth / 2;
+		h = (int)outputHeight / 2;
+		w &= ~1;
+		h &= ~1;
+		if (w < 2)
+			w = 2;
+		if (h < 2)
+			h = 2;
+		x = ((int)outputWidth - w) / 2;
+		y = ((int)outputHeight - h) / 2;
+		return;
+	}
+
+	const uint32_t refWidth = (uint32_t)config_get_int(Config(), "Video", "CropStreamRefCX");
+	const uint32_t refHeight = (uint32_t)config_get_int(Config(), "Video", "CropStreamRefCY");
+	ScaleOutputRect(x, y, w, h, refWidth, refHeight, outputWidth, outputHeight);
+
+	// Most hardware encoders reject odd crop dimensions for 4:2:0 formats.
+	w &= ~1;
+	h &= ~1;
+	if (w < 2 || h < 2) {
+		w = std::max(2, (int)outputWidth / 2);
+		h = std::max(2, (int)outputHeight / 2);
+		x = ((int)outputWidth - w) / 2;
+		y = ((int)outputHeight - h) / 2;
+	}
+}
+
+void OBSBasic::SetCropStreamRect(int x, int y, int w, int h, uint32_t outputWidth, uint32_t outputHeight)
+{
+	config_set_int(Config(), "Video", "CropStreamX", x);
+	config_set_int(Config(), "Video", "CropStreamY", y);
+	config_set_int(Config(), "Video", "CropStreamWidth", w);
+	config_set_int(Config(), "Video", "CropStreamHeight", h);
+	if (outputWidth && outputHeight) {
+		config_set_int(Config(), "Video", "CropStreamRefCX", (int)outputWidth);
+		config_set_int(Config(), "Video", "CropStreamRefCY", (int)outputHeight);
+	}
+}
+
+void OBSBasic::GetManualRoiRect(int &left, int &top, int &right, int &bottom, uint32_t outputWidth,
+				uint32_t outputHeight)
+{
+	if (!outputWidth || !outputHeight) {
+		left = top = right = bottom = 0;
+		return;
+	}
+
+	left = config_get_int(Config(), "Video", "RoiLeft");
+	top = config_get_int(Config(), "Video", "RoiTop");
+	right = config_get_int(Config(), "Video", "RoiRight");
+	bottom = config_get_int(Config(), "Video", "RoiBottom");
+
+	if (right <= left || bottom <= top) {
+		left = (int)outputWidth * 25 / 100;
+		top = (int)outputHeight * 10 / 100;
+		right = (int)outputWidth * 75 / 100;
+		bottom = (int)outputHeight * 90 / 100;
+		return;
+	}
+
+	int x = left;
+	int y = top;
+	int w = right - left;
+	int h = bottom - top;
+	const uint32_t refWidth = (uint32_t)config_get_int(Config(), "Video", "RoiRefCX");
+	const uint32_t refHeight = (uint32_t)config_get_int(Config(), "Video", "RoiRefCY");
+	ScaleOutputRect(x, y, w, h, refWidth, refHeight, outputWidth, outputHeight);
+	left = x;
+	top = y;
+	right = x + w;
+	bottom = y + h;
+}
+
+void OBSBasic::SetManualRoiRect(int left, int top, int right, int bottom, uint32_t outputWidth,
+				uint32_t outputHeight)
+{
+	config_set_int(Config(), "Video", "RoiLeft", left);
+	config_set_int(Config(), "Video", "RoiTop", top);
+	config_set_int(Config(), "Video", "RoiRight", right);
+	config_set_int(Config(), "Video", "RoiBottom", bottom);
+	if (outputWidth && outputHeight) {
+		config_set_int(Config(), "Video", "RoiRefCX", (int)outputWidth);
+		config_set_int(Config(), "Video", "RoiRefCY", (int)outputHeight);
+	}
+}
+
 void OBSBasic::UpdateCropStreamOverlay()
 {
 	obs_video_info ovi;
@@ -794,20 +913,13 @@ void OBSBasic::UpdateCropStreamOverlay()
 	const uint32_t outputHeight = haveVideo ? video_output_get_height(obs_get_video()) : 0;
 
 	const bool enabled = config_get_bool(Config(), "Video", "CropStreamEnabled");
-	int cropX = config_get_int(Config(), "Video", "CropStreamX");
-	int cropY = config_get_int(Config(), "Video", "CropStreamY");
-	int cropW = config_get_int(Config(), "Video", "CropStreamWidth");
-	int cropH = config_get_int(Config(), "Video", "CropStreamHeight");
-
-	if (!enabled || !haveVideo || !outputWidth || !outputHeight || cropW <= 0 || cropH <= 0) {
+	if (!enabled || !haveVideo || !outputWidth || !outputHeight) {
 		ui->preview->SetCropOverlay(false, false);
 		return;
 	}
 
-	cropX = std::clamp(cropX, 0, (int)outputWidth - 1);
-	cropY = std::clamp(cropY, 0, (int)outputHeight - 1);
-	cropW = std::clamp(cropW, 1, (int)outputWidth - cropX);
-	cropH = std::clamp(cropH, 1, (int)outputHeight - cropY);
+	int cropX, cropY, cropW, cropH;
+	GetCropStreamRect(cropX, cropY, cropW, cropH, outputWidth, outputHeight);
 
 	// Inverse of the canvas -> output scaling in OnCropRegionSelected().
 	const float scaleX = (float)ovi.base_width / (float)outputWidth;
@@ -840,10 +952,7 @@ void OBSBasic::OnCropRegionSelected(float left, float top, float right, float bo
 	if (cropR - cropX < 16 || cropB - cropY < 16)
 		return;
 
-	config_set_int(Config(), "Video", "CropStreamX", cropX);
-	config_set_int(Config(), "Video", "CropStreamY", cropY);
-	config_set_int(Config(), "Video", "CropStreamWidth", cropR - cropX);
-	config_set_int(Config(), "Video", "CropStreamHeight", cropB - cropY);
+	SetCropStreamRect(cropX, cropY, cropR - cropX, cropB - cropY, outputWidth, outputHeight);
 	config_save_safe(Config(), "tmp", nullptr);
 
 	UpdateCropStreamOverlay();
@@ -884,10 +993,7 @@ void OBSBasic::OnRoiRegionSelected(float left, float top, float right, float bot
 		return;
 
 	config_set_bool(Config(), "Video", "RoiEnabled", true);
-	config_set_int(Config(), "Video", "RoiLeft", roiLeft);
-	config_set_int(Config(), "Video", "RoiTop", roiTop);
-	config_set_int(Config(), "Video", "RoiRight", roiRight);
-	config_set_int(Config(), "Video", "RoiBottom", roiBottom);
+	SetManualRoiRect(roiLeft, roiTop, roiRight, roiBottom, outputWidth, outputHeight);
 	config_save_safe(Config(), "tmp", nullptr);
 
 	// Refreshes the passive overlay to the rect just saved above, instead

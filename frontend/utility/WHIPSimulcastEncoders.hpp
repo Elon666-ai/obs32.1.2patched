@@ -70,6 +70,54 @@ static inline int64_t WHIPSimulcastProportionalBitrate(int mainBitrate, uint32_t
 	return bitrate > 0 ? bitrate : 1;
 }
 
+// Resolution ladder for the scaled-down simulcast layers (slot 1 is the
+// highest-quality scaled layer, immediately below layer 0 / the main output).
+// 4K:      1440p -> 1080p -> 720p -> 360p
+// 1440p:   1080p -> 720p  -> 360p -> 240p
+// Other resolutions keep the previous even step-down fallback.
+static inline void WHIPSimulcastLayerSize(uint32_t mainWidth, uint32_t mainHeight, int totalLayers, int slot,
+					  uint32_t &width, uint32_t &height)
+{
+	width = mainWidth;
+	height = mainHeight;
+	if (totalLayers <= 1 || slot <= 0 || slot >= totalLayers)
+		return;
+
+	const uint32_t minDim = std::min(mainWidth, mainHeight);
+	int target = 0;
+
+	if (minDim >= 2160) {
+		static const int ladder[] = {1440, 1080, 720, 360, 240};
+		target = ladder[std::min(slot - 1, 4)];
+	} else if (minDim >= 1440) {
+		static const int ladder[] = {1080, 720, 360, 240, 180};
+		target = ladder[std::min(slot - 1, 4)];
+	} else {
+		width = (mainWidth / totalLayers) * (totalLayers - slot);
+		width -= width % 2;
+		height = (mainHeight / totalLayers) * (totalLayers - slot);
+		height -= height % 2;
+		return;
+	}
+
+	if (mainWidth <= mainHeight) {
+		width = (uint32_t)target;
+		height = (uint32_t)(((uint64_t)mainHeight * (uint64_t)target + mainWidth / 2) / mainWidth);
+	} else {
+		height = (uint32_t)target;
+		width = (uint32_t)(((uint64_t)mainWidth * (uint64_t)target + mainHeight / 2) / mainHeight);
+	}
+
+	width &= ~1u;
+	height &= ~1u;
+	width = std::min(width, mainWidth);
+	height = std::min(height, mainHeight);
+	if (width < 2)
+		width = 2;
+	if (height < 2)
+		height = 2;
+}
+
 static inline bool GetWHIPSimulcastLayerConfig(config_t *config, int layerNum, WHIPSimulcastLayer *layer)
 {
 	std::string prefix = "WHIPSimulcastLayer" + std::to_string(layerNum);
@@ -122,8 +170,6 @@ public:
 
 		usingCustomLayer.assign(whipSimulcastTotalLayers, false);
 
-		auto widthStep = outputWidth / whipSimulcastTotalLayers;
-		auto heightStep = outputHeight / whipSimulcastTotalLayers;
 		int videoBitrate = videoSettings ? static_cast<int>(obs_data_get_int(videoSettings, "bitrate")) : 0;
 		std::string encoder_name = "whip_simulcast_0";
 
@@ -153,10 +199,8 @@ public:
 				width = custom.width;
 				height = custom.height;
 			} else {
-				width = widthStep * i;
-				width -= width % 2;
-				height = heightStep * i;
-				height -= height % 2;
+				WHIPSimulcastLayerSize(outputWidth, outputHeight, whipSimulcastTotalLayers, slot, width,
+						       height);
 			}
 
 			if (videoSettings) {

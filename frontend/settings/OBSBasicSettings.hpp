@@ -120,6 +120,7 @@ private:
 
 	uint32_t outputCX = 0;
 	uint32_t outputCY = 0;
+	QString lastBaseResolutionText;
 
 	QPointer<QCheckBox> simpleVodTrack;
 
@@ -353,6 +354,7 @@ private:
 	void LoadDownscaleFilters();
 	void LoadResolutionLists();
 	void LoadFPSData();
+	void ApplyResolutionFpsCap();
 
 	/* a11y */
 	void UpdateA11yColors();

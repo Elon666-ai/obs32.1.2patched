@@ -614,10 +614,9 @@ void OBSBasicSettings::RebuildWHIPSimulcastLayerRows()
 	for (int layer = 1; layer < totalLayers; layer++) {
 		std::string prefix = "WHIPSimulcastLayer" + std::to_string(layer);
 
-		uint32_t defaultWidth = (outputWidth / totalLayers) * (totalLayers - layer);
-		defaultWidth -= defaultWidth % 2;
-		uint32_t defaultHeight = (outputHeight / totalLayers) * (totalLayers - layer);
-		defaultHeight -= defaultHeight % 2;
+		uint32_t defaultWidth = 0;
+		uint32_t defaultHeight = 0;
+		WHIPSimulcastLayerSize(outputWidth, outputHeight, totalLayers, layer, defaultWidth, defaultHeight);
 		int defaultBitrate = (int)WHIPSimulcastProportionalBitrate(mainBitrate, outputWidth, outputHeight,
 									    defaultWidth, defaultHeight);
 
@@ -709,17 +708,14 @@ void OBSBasicSettings::RefreshWHIPSimulcastLayerDefault(size_t layerIdx)
 	const auto &row = whipSimulcastLayerRows[layerIdx];
 
 	int totalLayers = ui->whipSimulcastTotalLayers->value();
-	// row i was pushed for "layer" = i+1 in RebuildWHIPSimulcastLayerRows's
-	// loop, whose formula's multiplier is (totalLayers - layer).
+	// row i was pushed for "layer" = i+1 in RebuildWHIPSimulcastLayerRows.
 	int layer = static_cast<int>(layerIdx) + 1;
-	int multiplier = totalLayers - layer;
 	uint32_t outputWidth, outputHeight;
 	GetWHIPSimulcastMainResolution(outputWidth, outputHeight);
 
-	uint32_t defaultWidth = (outputWidth / totalLayers) * multiplier;
-	defaultWidth -= defaultWidth % 2;
-	uint32_t defaultHeight = (outputHeight / totalLayers) * multiplier;
-	defaultHeight -= defaultHeight % 2;
+	uint32_t defaultWidth = 0;
+	uint32_t defaultHeight = 0;
+	WHIPSimulcastLayerSize(outputWidth, outputHeight, totalLayers, layer, defaultWidth, defaultHeight);
 
 	// Same mode-aware mainBitrate source as RebuildWHIPSimulcastLayerRows()
 	// - see its comment for why simpleOutputVBitrate alone isn't enough.
@@ -1512,7 +1508,25 @@ bool OBSBasicSettings::ResFPSValid(obs_service_resolution *res_list, size_t res_
 	return true;
 }
 
-extern void set_closest_res(int &cx, int &cy, struct obs_service_resolution *res_list, size_t count);
+static void set_closest_res(int &cx, int &cy, struct obs_service_resolution *res_list, size_t count)
+{
+	int best_pixel_diff = 0x7FFFFFFF;
+	int start_cx = cx;
+	int start_cy = cy;
+
+	for (size_t i = 0; i < count; i++) {
+		struct obs_service_resolution &res = res_list[i];
+		int pixel_cx_diff = abs(start_cx - res.cx);
+		int pixel_cy_diff = abs(start_cy - res.cy);
+		int pixel_diff = pixel_cx_diff + pixel_cy_diff;
+
+		if (pixel_diff < best_pixel_diff) {
+			best_pixel_diff = pixel_diff;
+			cx = res.cx;
+			cy = res.cy;
+		}
+	}
+}
 
 /* Checks for and updates the resolution and FPS limits of a service, if any.
  *
@@ -1713,6 +1727,8 @@ bool OBSBasicSettings::UpdateResFPSLimits()
 	/* ------------------------------------ */
 
 	lastIgnoreRecommended = (int)ignoreRecommended;
+
+	ApplyResolutionFpsCap();
 
 	return true;
 }

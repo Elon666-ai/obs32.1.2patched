@@ -227,6 +227,74 @@ const char *GetStreamOutputType(const obs_service_t *service)
 	return nullptr;
 }
 
+bool IsBitrateCappedStreamProtocol(obs_service_t *service)
+{
+	if (!service)
+		return false;
+
+	const char *protocol = obs_service_get_protocol(service);
+	if (!protocol)
+		return false;
+
+	if (astrcmpi(protocol, "WHIP") == 0 || astrcmpi(protocol, "SRT") == 0)
+		return true;
+
+	// ERTMP is rtmp_custom with the is_ertmp flag set.
+	if (astrcmpi(protocol, "RTMP") == 0 && strcmp(obs_service_get_id(service), "rtmp_custom") == 0) {
+		OBSDataAutoRelease settings = obs_service_get_settings(service);
+		return settings && obs_data_get_bool(settings, "is_ertmp");
+	}
+
+	return false;
+}
+
+int GetLinkedVideoBitrate(uint32_t width, uint32_t height)
+{
+	const uint32_t minDim = std::min(width, height);
+	if (minDim >= 2160)
+		return 10000;
+	if (minDim >= 1440)
+		return 5000;
+	if (minDim >= 1080)
+		return 3000;
+	return 1000;
+}
+
+void ApplyLinkedVideoBitrate(obs_data_t *settings, uint32_t width, uint32_t height)
+{
+	if (!settings)
+		return;
+
+	const int bitrate = GetLinkedVideoBitrate(width, height);
+	obs_data_set_int(settings, "bitrate", bitrate);
+
+	// Keep VBR/level ceilings from sitting below the new target.
+	static const char *maxKeys[] = {"max_bitrate", "maxrate", "vbv-maxrate"};
+	for (const char *key : maxKeys) {
+		const int value = (int)obs_data_get_int(settings, key);
+		if (value > 0 && value < bitrate)
+			obs_data_set_int(settings, key, bitrate);
+	}
+}
+
+void ClampStreamBitrateForProtocol(obs_service_t *service, obs_data_t *videoSettings)
+{
+	if (!videoSettings || !IsBitrateCappedStreamProtocol(service))
+		return;
+
+	static constexpr int kMaxVideoBitrateKbps = 10000;
+	static const char *keys[] = {"bitrate", "max_bitrate", "maxrate", "vbv-maxrate"};
+
+	for (const char *key : keys) {
+		const int value = (int)obs_data_get_int(videoSettings, key);
+		if (value > kMaxVideoBitrateKbps) {
+			obs_data_set_int(videoSettings, key, kMaxVideoBitrateKbps);
+			blog(LOG_INFO, "Capping streaming %s to %d kbps for WHIP/SRT/ERTMP",
+			     key, kMaxVideoBitrateKbps);
+		}
+	}
+}
+
 BasicOutputHandler::BasicOutputHandler(OBSBasic *main_) : main(main_)
 {
 	if (main->vcamEnabled) {
@@ -722,31 +790,18 @@ void BasicOutputHandler::StartCropStreaming(obs_service_t *service)
 		return;
 	}
 
-	int cropX = (int)config_get_int(main->Config(), "Video", "CropStreamX");
-	int cropY = (int)config_get_int(main->Config(), "Video", "CropStreamY");
-	int cropW = (int)config_get_int(main->Config(), "Video", "CropStreamWidth");
-	int cropH = (int)config_get_int(main->Config(), "Video", "CropStreamHeight");
 	int cropFps = (int)config_get_int(main->Config(), "Video", "CropStreamFPS");
 	if (cropFps <= 0)
 		cropFps = 15;
 	cropFps = std::clamp(cropFps, 1, 120);
 
-	if (cropW <= 0 || cropH <= 0) {
-		blog(LOG_WARNING, "[crop] invalid crop size %dx%d, skipping crop stream", cropW, cropH);
-		return;
-	}
-
-	cropX = std::clamp(cropX, 0, (int)mainW - 1);
-	cropY = std::clamp(cropY, 0, (int)mainH - 1);
-	cropW = std::min(cropW, (int)mainW - cropX);
-	cropH = std::min(cropH, (int)mainH - cropY);
-
-	// Keep the encoded dimensions even; most hardware encoders reject odd
-	// dimensions for 4:2:0 formats.
-	cropW &= ~1;
-	cropH &= ~1;
+	// CropStreamX/Y/W/H are stored in main-output pixels. Scale them from
+	// the output size they were saved against to the encoder's actual size
+	// (e.g. 1080p -> 1440p), so the cropped region keeps its framing.
+	int cropX, cropY, cropW, cropH;
+	main->GetCropStreamRect(cropX, cropY, cropW, cropH, mainW, mainH);
 	if (cropW < 2 || cropH < 2) {
-		blog(LOG_WARNING, "[crop] crop size %dx%d is too small, skipping crop stream", cropW, cropH);
+		blog(LOG_WARNING, "[crop] invalid crop size %dx%d, skipping crop stream", cropW, cropH);
 		return;
 	}
 

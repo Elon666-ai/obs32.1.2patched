@@ -603,8 +603,6 @@ OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new 
 	UpdatePreviewOverflowSettings();
 }
 
-static const double scaled_vals[] = {1.0, 1.25, (1.0 / 0.75), 1.5, (1.0 / 0.6), 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 0.0};
-
 #ifdef __APPLE__ // macOS
 #define DEFAULT_CONTAINER "hybrid_mov"
 #else // Windows/Linux
@@ -631,12 +629,20 @@ bool OBSBasic::InitBasicConfigDefaults()
 
 	bool oldResolutionDefaults = config_get_bool(App()->GetUserConfig(), "General", "Pre19Defaults");
 
-	/* use 1920x1080 for new default base res if main monitor is above
-	 * 1920x1080, but don't apply for people from older builds -- only to
-	 * new users */
-	if (!oldResolutionDefaults && (cx * cy) > (1920 * 1080)) {
-		cx = 1920;
-		cy = 1080;
+	/* Cap the default canvas at 1440p: 1440p30 is the highest output this
+	 * build targets, even when the capture card/monitor is 4K or larger.
+	 * Preserve the monitor aspect ratio while fitting inside 2560x1440. */
+	if (!oldResolutionDefaults && (cx > 2560 || cy > 1440)) {
+		if (cx > 2560) {
+			cy = cy * 2560 / cx;
+			cx = 2560;
+		}
+		if (cy > 1440) {
+			cx = cx * 1440 / cy;
+			cy = 1440;
+		}
+		cx &= ~1u;
+		cy &= ~1u;
 	}
 
 	bool changed = false;
@@ -782,13 +788,17 @@ bool OBSBasic::InitBasicConfigDefaults()
 	config_set_default_int(activeConfiguration, "Video", "CropStreamWidth", 0);
 	config_set_default_int(activeConfiguration, "Video", "CropStreamHeight", 0);
 	config_set_default_int(activeConfiguration, "Video", "CropStreamFPS", 15);
+	config_set_default_int(activeConfiguration, "Video", "CropStreamRefCX", 0);
+	config_set_default_int(activeConfiguration, "Video", "CropStreamRefCY", 0);
+	config_set_default_int(activeConfiguration, "Video", "RoiRefCX", 0);
+	config_set_default_int(activeConfiguration, "Video", "RoiRefCY", 0);
 	config_set_default_bool(activeConfiguration, "Stream1", "EnableMultitrackVideo", false);
 	config_set_default_bool(activeConfiguration, "Stream1", "MultitrackVideoMaximumAggregateBitrateAuto", true);
 	config_set_default_bool(activeConfiguration, "Stream1", "MultitrackVideoMaximumVideoTracksAuto", true);
 
 	config_set_default_string(activeConfiguration, "SimpleOutput", "FilePath", GetDefaultVideoSavePath().c_str());
 	config_set_default_string(activeConfiguration, "SimpleOutput", "RecFormat2", DEFAULT_CONTAINER);
-	config_set_default_uint(activeConfiguration, "SimpleOutput", "VBitrate", 6000);
+	config_set_default_uint(activeConfiguration, "SimpleOutput", "VBitrate", 5000);
 	config_set_default_uint(activeConfiguration, "SimpleOutput", "ABitrate", 160);
 	config_set_default_bool(activeConfiguration, "SimpleOutput", "UseAdvanced", false);
 	config_set_default_string(activeConfiguration, "SimpleOutput", "Preset", "veryfast");
@@ -820,7 +830,7 @@ bool OBSBasic::InitBasicConfigDefaults()
 	config_set_default_bool(activeConfiguration, "AdvOut", "FFOutputToFile", true);
 	config_set_default_string(activeConfiguration, "AdvOut", "FFFilePath", GetDefaultVideoSavePath().c_str());
 	config_set_default_string(activeConfiguration, "AdvOut", "FFExtension", "mp4");
-	config_set_default_uint(activeConfiguration, "AdvOut", "FFVBitrate", 6000);
+	config_set_default_uint(activeConfiguration, "AdvOut", "FFVBitrate", 5000);
 	config_set_default_uint(activeConfiguration, "AdvOut", "FFVGOPSize", 250);
 	config_set_default_bool(activeConfiguration, "AdvOut", "FFUseRescale", false);
 	config_set_default_bool(activeConfiguration, "AdvOut", "FFIgnoreCompat", false);
@@ -874,10 +884,11 @@ bool OBSBasic::InitBasicConfigDefaults()
 	config_set_default_bool(activeConfiguration, "Output", "LowLatencyEnable", false);
 
 	// Scheduled streaming ("区间直播") defaults: a single 07:00 -> 06:00 slot
-	// (wraps past midnight) covering every day, with the feature enabled and
-	// active by default so it starts/stops the stream without manual setup.
+	// (wraps past midnight) covering every day. The feature switch is on,
+	// but the schedule itself is never armed on launch - the user must
+	// press the scheduled-streaming button each session.
 	config_set_default_bool(activeConfiguration, "Schedule", "FeatureEnabled", true);
-	config_set_default_bool(activeConfiguration, "Schedule", "Enabled", true);
+	config_set_default_bool(activeConfiguration, "Schedule", "Enabled", false);
 	config_set_default_int(activeConfiguration, "Schedule", "Slot.Count", 1);
 	config_set_default_int(activeConfiguration, "Schedule", "Slot0.Start", 7 * 60);
 	config_set_default_int(activeConfiguration, "Schedule", "Slot0.End", 6 * 60);
@@ -889,17 +900,10 @@ bool OBSBasic::InitBasicConfigDefaults()
 	config_set_default_bool(activeConfiguration, "Schedule", "Slot0.Day.Sat", true);
 	config_set_default_bool(activeConfiguration, "Schedule", "Slot0.Day.Sun", true);
 
-	int i = 0;
+	/* Default the stream/recording output to the capped canvas resolution
+	 * (up to 1440p) instead of downscaling to 720p. */
 	uint32_t scale_cx = cx;
 	uint32_t scale_cy = cy;
-
-	/* use a default scaled resolution that has a pixel count no higher
-	 * than 1280x720 */
-	while (((scale_cx * scale_cy) > (1280 * 720)) && scaled_vals[i] > 0.0) {
-		double scale = scaled_vals[i++];
-		scale_cx = uint32_t(double(cx) / scale);
-		scale_cy = uint32_t(double(cy) / scale);
-	}
 
 	config_set_default_uint(activeConfiguration, "Video", "OutputCX", scale_cx);
 	config_set_default_uint(activeConfiguration, "Video", "OutputCY", scale_cy);
@@ -1336,16 +1340,12 @@ void OBSBasic::OBSInit()
 	disableColorSpaceConversion(this);
 #endif
 
-	bool has_last_version = config_has_user_value(App()->GetAppConfig(), "General", "LastVersion");
 	bool first_run = config_get_bool(App()->GetUserConfig(), "General", "FirstRun");
 
 	if (!first_run) {
 		config_set_bool(App()->GetUserConfig(), "General", "FirstRun", true);
 		config_save_safe(App()->GetUserConfig(), "tmp", nullptr);
 	}
-
-	if (!first_run && !has_last_version && !Active())
-		QMetaObject::invokeMethod(this, "on_autoConfigure_triggered", Qt::QueuedConnection);
 
 #if (defined(_WIN32) || defined(__APPLE__)) && (OBS_RELEASE_CANDIDATE > 0 || OBS_BETA > 0)
 	/* Automatically set branch to "beta" the first time a pre-release build is run. */
@@ -1804,6 +1804,23 @@ int OBSBasic::ResetVideo()
 		ovi.output_height = ovi.base_height;
 		config_set_uint(activeConfiguration, "Video", "OutputCX", ovi.base_width);
 		config_set_uint(activeConfiguration, "Video", "OutputCY", ovi.base_height);
+	}
+
+	// 4K and 1440p outputs are limited to 30 fps (orientation-independent).
+	const uint32_t baseMinDim = ovi.base_width < ovi.base_height ? ovi.base_width : ovi.base_height;
+	const uint32_t outputMinDim =
+		ovi.output_width < ovi.output_height ? ovi.output_width : ovi.output_height;
+	if (baseMinDim >= 1440 || outputMinDim >= 1440) {
+		if (ovi.fps_den == 0 || (uint64_t)ovi.fps_num > 30ULL * (uint64_t)ovi.fps_den) {
+			ovi.fps_num = 30;
+			ovi.fps_den = 1;
+			config_set_uint(activeConfiguration, "Video", "FPSType", 0);
+			config_set_string(activeConfiguration, "Video", "FPSCommon", "30");
+			config_set_uint(activeConfiguration, "Video", "FPSInt", 30);
+			config_set_uint(activeConfiguration, "Video", "FPSNum", 30);
+			config_set_uint(activeConfiguration, "Video", "FPSDen", 1);
+			blog(LOG_WARNING, "Capping video to 30 fps for 1440p/4K output");
+		}
 	}
 
 	ret = AttemptToResetVideo(&ovi);

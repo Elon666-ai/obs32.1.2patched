@@ -213,6 +213,16 @@ inline bool can_use_output(const char *prot, const char *output, const char *pro
 
 const char *GetStreamOutputType(const obs_service_t *service);
 
+// WHIP, SRT and Enhanced RTMP (ERTMP) all share the same 10 Mbps video
+// bitrate ceiling in this build, regardless of the user's encoder settings.
+bool IsBitrateCappedStreamProtocol(obs_service_t *service);
+void ClampStreamBitrateForProtocol(obs_service_t *service, obs_data_t *videoSettings);
+
+// Streaming bitrate follows the output resolution:
+// 2160p -> 10 Mbps, 1440p -> 5 Mbps, 1080p -> 3 Mbps, 720p -> 1 Mbps.
+int GetLinkedVideoBitrate(uint32_t width, uint32_t height);
+void ApplyLinkedVideoBitrate(obs_data_t *settings, uint32_t width, uint32_t height);
+
 inline bool ServiceSupportsVodTrack(const char *service)
 {
 	static const char *vodTrackServices[] = {"Twitch"};

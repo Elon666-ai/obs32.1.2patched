@@ -206,8 +206,6 @@ class OBSBasic : public OBSMainWindow {
 	friend class OBSBasicSourceSelect;
 	friend class OBSBasicSettings;
 	friend class Auth;
-	friend class AutoConfig;
-	friend class AutoConfigStreamPage;
 	friend class ExtraBrowsersModel;
 	friend class OBSYoutubeActions;
 	friend struct BasicOutputHandler;
@@ -635,7 +633,6 @@ private slots:
 	void on_toggleListboxToolbars_toggled(bool visible);
 	void on_toggleStatusBar_toggled(bool visible);
 
-	void on_autoConfigure_triggered();
 	void on_stats_triggered();
 	void on_idianPlayground_triggered();
 
@@ -679,7 +676,6 @@ private:
 	{
 		if (ui->profileMenu->isEnabled() || force) {
 			ui->profileMenu->setEnabled(false);
-			ui->autoConfigure->setEnabled(false);
 			App()->IncrementSleepInhibition();
 			UpdateProcessPriority();
 
@@ -705,7 +701,6 @@ private:
 	{
 		if (!outputHandler->Active() && !ui->profileMenu->isEnabled()) {
 			ui->profileMenu->setEnabled(true);
-			ui->autoConfigure->setEnabled(true);
 			App()->DecrementSleepInhibition();
 			ClearProcessPriority();
 
@@ -865,6 +860,19 @@ private:
 	// Refreshes the preview crop overlay from the Video config.
 	void UpdateCropStreamOverlay();
 
+public:
+	// Crop stream / manual ROI rectangles are stored in output pixels.
+	// These read the saved rectangle, scaling it from the output size it
+	// was saved against (CropStreamRefCX/CY / RoiRefCX/CY) to the given
+	// current output size, and write it back with an updated reference.
+	void GetCropStreamRect(int &x, int &y, int &w, int &h, uint32_t outputWidth, uint32_t outputHeight);
+	void SetCropStreamRect(int x, int y, int w, int h, uint32_t outputWidth, uint32_t outputHeight);
+	void GetManualRoiRect(int &left, int &top, int &right, int &bottom, uint32_t outputWidth,
+			      uint32_t outputHeight);
+	void SetManualRoiRect(int left, int top, int right, int bottom, uint32_t outputWidth,
+			      uint32_t outputHeight);
+
+private:
 	/* OBS Callbacks */
 	static void RenderMain(void *data, uint32_t cx, uint32_t cy);
 
@@ -919,7 +927,7 @@ signals:
 private:
 	OBSProfileCache profiles{};
 
-	void SetupNewProfile(const std::string &profileName, bool useWizard = false);
+	void SetupNewProfile(const std::string &profileName);
 	void SetupDuplicateProfile(const std::string &profileName);
 	void SetupRenameProfile(const std::string &profileName);
 

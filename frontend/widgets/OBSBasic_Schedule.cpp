@@ -34,11 +34,15 @@ constexpr int kScheduleCheckIntervalMs = 5000;
 
 void OBSBasic::InitSchedule()
 {
-	/* Scheduled streaming honors the saved "Schedule"/"Enabled" flag, which
-	 * defaults to true (see the defaults registered in OBSInit), so a
-	 * schedule covering the current time starts the stream on launch without
-	 * manual setup. The control-panel "Start/Stop Scheduled Streaming" button
-	 * still lets the user turn it off. */
+	/* Scheduled streaming is never armed automatically on launch. Even if a
+	 * previous session left "Schedule"/"Enabled" set, force it off here so
+	 * the user has to explicitly press the control-panel "Start Scheduled
+	 * Streaming" button for this session. The feature switch
+	 * ("Schedule"/"FeatureEnabled") is independent and may stay on. */
+	if (activeConfiguration && config_get_bool(activeConfiguration, "Schedule", "Enabled")) {
+		config_set_bool(activeConfiguration, "Schedule", "Enabled", false);
+		activeConfiguration.SaveSafe("tmp");
+	}
 
 	scheduleTimer = new QTimer(this);
 	connect(scheduleTimer, &QTimer::timeout, this, &OBSBasic::CheckSchedule);
@@ -50,7 +54,7 @@ void OBSBasic::InitSchedule()
 				ReloadSchedule();
 		});
 
-	emit ScheduleEnabledChanged(ScheduleEnabled());
+	emit ScheduleEnabledChanged(false);
 	emit ScheduleFeatureEnabledChanged(ScheduleFeatureEnabled());
 
 	CheckSchedule();

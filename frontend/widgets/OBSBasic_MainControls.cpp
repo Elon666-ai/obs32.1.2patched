@@ -43,7 +43,6 @@
 #if defined(_WIN32) || defined(WHATSNEW_ENABLED)
 #include <utility/WhatsNewInfoThread.hpp>
 #endif
-#include <wizards/AutoConfig.hpp>
 
 #include <qt-wrappers.hpp>
 
@@ -624,14 +623,6 @@ void OBSBasic::on_actionMainUndo_triggered()
 void OBSBasic::on_actionMainRedo_triggered()
 {
 	undo_s.redo();
-}
-
-void OBSBasic::on_autoConfigure_triggered()
-{
-	AutoConfig test(this);
-	test.setModal(true);
-	test.show();
-	test.exec();
 }
 
 void OBSBasic::on_stats_triggered()
