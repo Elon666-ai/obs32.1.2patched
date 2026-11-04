@@ -14,22 +14,24 @@ struct OutputStatus {
     std::string streamName;    // resolved stream name (e.g. "3drush-fwh_economic")
     std::string srtURL;        // full SRT publish URL
     std::string status;        // "Idle", "Starting", "Running", "Retrying", "Stopped"
-    std::string codec;         // "H.264" / "HEVC" / "AAC"
+    std::string codec;         // "H.264" / "AAC"
     std::string resolution;    // "1920x1080"
-    std::string bitrate;       // "2000k"
+    std::string bitrate;       // "5000k"
     bool        audioOnly = false;
 };
 
 /// Manages the multi-stream ABR ladder: resolution, bitrate, and SRT URL generation
-/// for all four (non-audio) output levels.
+/// for the H.264 origin/high/standard/economic output levels.
 class StreamLadder {
 public:
     StreamLadder() = default;
 
-    /// Initialize from config.
+    /// Initialize from config. When input.inputResolution is "1080P" the
+    /// 1080p "high" rung is dropped and the origin rung itself is capped to
+    /// 1080p/3Mbps; otherwise the four-stream 1440p origin ladder is used.
     void LoadFromConfig(const MultipusherConfig& cfg);
 
-    /// Get all output statuses (4 video outputs + optionally audio).
+    /// Get all output statuses (up to four video outputs).
     std::vector<OutputStatus> GetStatuses() const;
 
     /// Update status for a specific stream.
@@ -53,7 +55,7 @@ public:
     /// Current config reference.
     const MultipusherConfig& Config() const { return cfg_; }
 
-    /// Default stream ladder (5 levels).
+    /// Default stream ladder (origin/high/standard/economic).
     static StreamLadder Defaults();
 
     /// Short human-readable codec name.

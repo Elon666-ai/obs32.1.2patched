@@ -65,7 +65,7 @@ void MultipusherDock::Register() {
             if (event != OBS_FRONTEND_EVENT_FINISHED_LOADING) return;
             QMainWindow* mw = static_cast<QMainWindow*>(obs_frontend_get_main_window());
             if (!mw) return;
-            auto* d = new QDockWidget(QString::fromUtf8("Multipusher v1.1.5 Amor@2026"), mw);
+            auto* d = new QDockWidget(QString::fromUtf8("Multipusher v1.1.6 Amor@2026"), mw);
             d->setObjectName("obsMultipusherDock");
             d->setWidget(new MultipusherDock(d));
             mw->addDockWidget(Qt::BottomDockWidgetArea, d);
@@ -123,8 +123,16 @@ void MultipusherDock::buildUI() {
     mainLayout->setSpacing(4);
     mainLayout->setContentsMargins(6, 6, 6, 6);
 
-    // Site / Stream / bitrate+ / Start Pub row
+    // Input / Site / Stream / bitrate+ / Start Pub row
     auto* row = new QHBoxLayout();
+    row->addWidget(new QLabel("Input:"));
+    inputCombo_ = new QComboBox();
+    inputCombo_->addItems({"4K", "1080P"});
+    inputCombo_->setMinimumWidth(80);
+    row->addWidget(inputCombo_);
+
+    row->addSpacing(12);
+
     row->addWidget(new QLabel("Site:"));
     siteNameCombo_ = new QComboBox();
     siteNameCombo_->addItems({"studio_3drush", "studio_gsp2w"});
@@ -135,20 +143,21 @@ void MultipusherDock::buildUI() {
 
     row->addWidget(new QLabel("Stream:"));
     streamNameCombo_ = new QComboBox();
-    streamNameCombo_->setMinimumWidth(140);
+    streamNameCombo_->setFixedWidth(70); // half of the previous 140px width
     streamNameCombo_->addItems({"fwh", "fwv"});
     row->addWidget(streamNameCombo_);
 
     row->addSpacing(12);
 
-    // bitrate+ bitrate boost percentage (default 20%)
+    // bitrate+ bitrate boost percentage (off by default so the configured
+    // 5Mbps/3Mbps ladder is used as-is)
     row->addWidget(new QLabel("bitrate+:"));
     qualitySpin_ = new QSpinBox();
     qualitySpin_->setRange(0, 100);
-    qualitySpin_->setValue(20);
+    qualitySpin_->setValue(0);
     qualitySpin_->setSuffix("%");
     qualitySpin_->setSingleStep(1);
-    qualitySpin_->setMinimumWidth(150); // +50% over the default ~100px control length
+    qualitySpin_->setFixedWidth(75); // half of the previous 150px width
     qualitySpin_->setToolTip("Boost all encoder bitrates by this percentage");
     row->addWidget(qualitySpin_);
 
@@ -170,6 +179,8 @@ void MultipusherDock::buildUI() {
     mainLayout->addLayout(intervalRow);
 
     // Use activated() — fires only on user selection, never programmatically
+    connect(inputCombo_, QOverload<int>::of(&QComboBox::activated),
+            this, &MultipusherDock::onInputChanged);
     connect(siteNameCombo_, QOverload<int>::of(&QComboBox::activated),
             this, &MultipusherDock::onSiteNameChanged);
     connect(streamNameCombo_, QOverload<int>::of(&QComboBox::activated),
@@ -198,6 +209,20 @@ void MultipusherDock::buildStreamTable() {
 
 // ── Slots ────────────────────────────────────────────────────────
 
+void MultipusherDock::onInputChanged(int index) {
+    QString input = inputCombo_->itemText(index);
+    MP_LOG(LOG_INFO, "[obs-multipusher] input changed to: %s", input.toUtf8().constData());
+    if (ctx()) {
+        auto& cfg = ctx()->config.GetMutable();
+        cfg.input.inputResolution = TO_STD(input);
+        ctx()->ladder.LoadFromConfig(cfg);
+        ctx()->config.Save(ctx()->config.Path());
+        if (ctx()->publishing)
+            appendLog("Input changed; restart publishing to apply the new stream ladder");
+    }
+    refreshStreamTable();
+}
+
 void MultipusherDock::onSiteNameChanged(int index) {
     QString siteName = siteNameCombo_->itemText(index);
     MP_LOG(LOG_INFO, "[obs-multipusher] site changed to: %s", siteName.toUtf8().constData());
@@ -209,6 +234,7 @@ void MultipusherDock::onSiteNameChanged(int index) {
         auto& cfg = ctx()->config.GetMutable();
         cfg.siteName = TO_STD(BuildStreamName(siteName, streamNameCombo_->currentText()));
         cfg.input.videoLayout = (streamNameCombo_->currentText() == "fwv") ? "portrait" : "landscape";
+        cfg.input.inputResolution = TO_STD(inputCombo_->currentText());
         ctx()->ladder.LoadFromConfig(cfg);
         ctx()->config.Save(ctx()->config.Path());
     }
@@ -225,6 +251,7 @@ void MultipusherDock::onStreamNameChanged(int index) {
         std::string name = TO_STD(view);
         std::string lower = Utils::ToLower(name);
         cfg.input.videoLayout = (lower.find("fwv") != std::string::npos) ? "portrait" : "landscape";
+        cfg.input.inputResolution = TO_STD(inputCombo_->currentText());
         ctx()->ladder.LoadFromConfig(cfg);
         ctx()->config.Save(ctx()->config.Path());
     }
@@ -259,6 +286,11 @@ void MultipusherDock::applyConfigToUI() {
     // The stream combo only shows the view suffix (fwh / fwv), never empty.
     PopulateStreamViews(streamNameCombo_, QSTRING(StreamLadder::ViewNameForStream(cfg.siteName)));
 
+    inputCombo_->blockSignals(true);
+    int inputIdx = inputCombo_->findText(QSTRING(cfg.input.inputResolution));
+    inputCombo_->setCurrentIndex(inputIdx >= 0 ? inputIdx : 0);
+    inputCombo_->blockSignals(false);
+
     loadIntervalToUI();
 }
 
@@ -267,6 +299,7 @@ void MultipusherDock::readUItoConfig() {
     auto& cfg = ctx()->config.GetMutable();
     cfg.siteName = TO_STD(BuildStreamName(siteNameCombo_->currentText(), streamNameCombo_->currentText()));
     cfg.input.videoLayout = (streamNameCombo_->currentText() == "fwv") ? "portrait" : "landscape";
+    cfg.input.inputResolution = TO_STD(inputCombo_->currentText());
     // Only update the ladder for table display, don't reconfigure outputs
     ctx()->ladder.LoadFromConfig(cfg);
 }
@@ -288,9 +321,10 @@ static QString formatBoostedBitrate(const std::string& bitrate, int boostPercent
 void MultipusherDock::refreshStreamTable() {
     if (!ctx()) return;
     auto statuses = ctx()->ladder.GetStatuses();
-    auto& cfg = ctx()->config.Get();
+    auto& cfg = ctx()->ladder.Config();
 
-    // Build a level->StreamConfig lookup for maxrate
+    // Build a level->StreamConfig lookup for maxrate (use the effective
+    // ladder so a 1080p origin shows the capped bitrate/maxrate).
     std::map<std::string, StreamConfig> levelMap;
     for (auto& s : cfg.streams)
         levelMap[s.level] = s;

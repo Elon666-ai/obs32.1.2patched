@@ -12,7 +12,7 @@ public:
     static constexpr const char* DEFAULT_PLAYER_URL = "https://abrplayer.numericgame.ph/";
 
     /// Build a player URL given a base URL, site name, and resolved stream names.
-    /// Stream names are keyed by level: "high", "standard", "standard_hevc", "economic", "bottom".
+    /// Stream names are keyed by level: "origin", "high", "standard", "economic".
     static std::string BuildURL(const std::string& baseURL,
                                 const std::string& siteName,
                                 const std::map<std::string, std::string>& streamNames,

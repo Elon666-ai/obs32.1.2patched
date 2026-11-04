@@ -2,7 +2,7 @@
 
 OBS Studio 插件，将 `multipusher` Fyne 桌面推流器的功能集成到 OBS 内。采集 OBS 当前场景输出，编码为 4 路 ABR 视频流（H.264/HEVC），通过 Tencent SRT 推送到腾讯云直播，并提供 Qt6 可停靠面板（Dock）进行实时控制。
 
-- 版本：**v1.1.5**
+- 版本：**v1.1.6**
 - 作者：**Amor**
 - 语言：C++17
 - 许可证：与 OBS Studio 主项目一致
@@ -203,48 +203,35 @@ obs-plugins/64bit/obs-multipusher/
     "videoDevice": "OBS Virtual Camera",
     "audioDevice": "",
     "videoFile": "",
-    "videoLayout": "landscape"
+    "videoLayout": "landscape",
+    "inputResolution": "4K"
   },
   "streams": [
     {
-      "level": "bottom",
-      "streamName": "{siteName}_audio",
-      "audioOnly": true,
-      "videoCodec": "",
-      "videoBitrate": "",
-      "videoMaxrate": "",
-      "portraitWidth": 0,
-      "portraitHeight": 0,
-      "landscapeWidth": 0,
-      "landscapeHeight": 0,
-      "audioCodec": "aac",
-      "audioBitrate": "128k"
-    },
-    {
-      "level": "economic",
-      "streamName": "{siteName}_economic",
+      "level": "origin",
+      "streamName": "{siteName}",
       "audioOnly": false,
       "videoCodec": "h264",
-      "videoBitrate": "400k",
-      "videoMaxrate": "600k",
-      "portraitWidth": 360,
-      "portraitHeight": 640,
-      "landscapeWidth": 640,
-      "landscapeHeight": 360,
+      "videoBitrate": "5000k",
+      "videoMaxrate": "7500k",
+      "portraitWidth": 1440,
+      "portraitHeight": 2560,
+      "landscapeWidth": 2560,
+      "landscapeHeight": 1440,
       "audioCodec": "aac",
       "audioBitrate": "128k"
     },
     {
-      "level": "standard_hevc",
-      "streamName": "{siteName}_standard_hevc",
+      "level": "high",
+      "streamName": "{siteName}_high",
       "audioOnly": false,
-      "videoCodec": "hevc",
-      "videoBitrate": "600k",
-      "videoMaxrate": "1000k",
-      "portraitWidth": 720,
-      "portraitHeight": 1280,
-      "landscapeWidth": 1280,
-      "landscapeHeight": 720,
+      "videoCodec": "h264",
+      "videoBitrate": "3000k",
+      "videoMaxrate": "4500k",
+      "portraitWidth": 1080,
+      "portraitHeight": 1920,
+      "landscapeWidth": 1920,
+      "landscapeHeight": 1080,
       "audioCodec": "aac",
       "audioBitrate": "128k"
     },
@@ -263,16 +250,16 @@ obs-plugins/64bit/obs-multipusher/
       "audioBitrate": "128k"
     },
     {
-      "level": "high",
-      "streamName": "{siteName}",
+      "level": "economic",
+      "streamName": "{siteName}_economic",
       "audioOnly": false,
       "videoCodec": "h264",
-      "videoBitrate": "2000k",
-      "videoMaxrate": "3000k",
-      "portraitWidth": 1080,
-      "portraitHeight": 1920,
-      "landscapeWidth": 1920,
-      "landscapeHeight": 1080,
+      "videoBitrate": "400k",
+      "videoMaxrate": "600k",
+      "portraitWidth": 360,
+      "portraitHeight": 640,
+      "landscapeWidth": 640,
+      "landscapeHeight": 360,
       "audioCodec": "aac",
       "audioBitrate": "128k"
     }
@@ -289,11 +276,13 @@ obs-plugins/64bit/obs-multipusher/
 
 | 逻辑档位 | 实际流名 | 编码 | 码率 | 分辨率 |
 |---------|---------|------|------|--------|
-| `bottom` | `{siteName}_audio` | AAC audio only | 128k | 无视频（当前不作为推流目标） |
-| `economic` | `{siteName}_economic` | H.264 + AAC | 400k / max 600k | 360×640 或 640×360 |
-| `standard_hevc` | `{siteName}_standard_hevc` | HEVC + AAC | 600k / max 1000k | 720×1280 或 1280×720 |
-| `standard` | `{siteName}_standard` | H.264 + AAC | 1000k / max 1500k | 720×1280 或 1280×720 |
-| `high` | `{siteName}` | H.264 + AAC | 2000k / max 3000k | 1080×1920 或 1920×1080 |
+| `origin` | `{siteName}` | H.264 + AAC | 5000k / max 7500k | 1440x2560 / 2560x1440 |
+| `high` | `{siteName}_high` | H.264 + AAC | 3000k / max 4500k | 1080x1920 / 1920x1080 |
+| `standard` | `{siteName}_standard` | H.264 + AAC | 1000k / max 1500k | 720x1280 / 1280x720 |
+| `economic` | `{siteName}_economic` | H.264 + AAC | 400k / max 600k | 360x640 / 640x360 |
+
+HEVC and audio-only outputs are no longer pushed. If the canvas is only 1080p, the high rung is omitted and origin is capped to 1080p/3000k.
+
 
 ### SRT URL 拼接
 

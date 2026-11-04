@@ -10,10 +10,10 @@
 #include <memory>
 
 #define PLUGIN_NAME    "obs-multipusher"
-#define PLUGIN_VERSION "1.1.5"
+#define PLUGIN_VERSION "1.1.6"
 #define PLUGIN_AUTHOR  "Amor"
 #define PLUGIN_DESC    "Multi-stream ABR SRT publisher for Tencent Cloud Live. " \
-                       "Encodes one source into four ABR streams and pushes via SRT."
+                       "Encodes one source into up to four H.264 ABR streams and pushes via SRT."
 
 /// Central plugin context holding all subsystems.
 /// Accessible globally via g_ctx.
@@ -24,7 +24,7 @@ struct MultipusherContext {
     OutputManager  outputs;
 
     bool publishing = false;
-    int qualityBoostPercent = 20;  // quality+ bitrate boost percentage
+    int qualityBoostPercent = 0;  // optional quality+ bitrate boost percentage
 
     /// Load config from default path and sync to subsystems.
     void LoadDefaultConfig();
@@ -44,7 +44,7 @@ struct MultipusherContext {
     /// Reload stream ladder from current config.
     void ReloadLadder();
 
-    /// Sync OBS built-in streaming service URL to the main (high) SRT URL.
+    /// Sync OBS built-in streaming service URL to the main (origin) SRT URL.
     void SyncOBSServiceURL();
 };
 

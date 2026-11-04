@@ -6,17 +6,17 @@
 
 /// Stream configuration for one ABR level.
 struct StreamConfig {
-    std::string level;            // "high", "standard", "standard_hevc", "economic", "bottom"
-    std::string streamName;       // "{siteName}" or "{siteName}_economic" etc.
+    std::string level;            // "origin", "high", "standard", "economic"
+    std::string streamName;       // "{siteName}" or "{siteName}_high" etc.
     bool        audioOnly = false;
 
-    std::string videoCodec;       // "h264" / "hevc"
-    std::string videoBitrate;     // "2000k"
-    std::string videoMaxrate;     // "3000k"
-    int         portraitWidth  = 1080;
-    int         portraitHeight = 1920;
-    int         landscapeWidth  = 1920;
-    int         landscapeHeight = 1080;
+    std::string videoCodec;       // "h264"
+    std::string videoBitrate;     // "5000k"
+    std::string videoMaxrate;     // "7500k"
+    int         portraitWidth  = 1440;
+    int         portraitHeight = 2560;
+    int         landscapeWidth  = 2560;
+    int         landscapeHeight = 1440;
 
     std::string audioCodec;       // "aac"
     std::string audioBitrate;     // "128k"
@@ -37,6 +37,7 @@ struct InputConfig {
     std::string audioDevice;
     std::string videoFile;
     std::string videoLayout = "portrait"; // "portrait" or "landscape"
+    std::string inputResolution = "4K";   // "4K" or "1080P"
 };
 
 /// Publish behavior configuration.
@@ -90,7 +91,7 @@ public:
     MultipusherConfig& GetMutable() { return cfg_; }
     void Set(const MultipusherConfig& cfg) { cfg_ = cfg; }
 
-    /// Default stream ladder (5 levels).
+    /// Default stream ladder (origin/high/standard/economic, all H.264).
     static std::vector<StreamConfig> DefaultStreams();
 
     /// Active (non-audio-only) streams for ABR output.
@@ -101,6 +102,10 @@ public:
     void SetPath(const std::string& p) { path_ = p; }
 
 private:
+    /// Drop legacy audio-only/HEVC levels and rewrite the ladder to the
+    /// origin/high/standard/economic H.264 set.
+    void NormalizeStreams();
+
     MultipusherConfig cfg_;
     std::string       path_;
 };

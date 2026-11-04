@@ -11,6 +11,26 @@ void StreamLadder::LoadFromConfig(const MultipusherConfig& cfg) {
     std::lock_guard<std::mutex> lock(*mu_);
     cfg_ = cfg;
 
+    // The panel's Input selector is authoritative: 4K input uses the full
+    // four-rung ladder; 1080P input drops the redundant 1080p "high" rung
+    // and caps the origin itself to 1080p/3Mbps.
+    if (cfg_.input.inputResolution == "1080P") {
+        cfg_.streams.erase(std::remove_if(cfg_.streams.begin(), cfg_.streams.end(),
+                                          [](const StreamConfig& s) { return s.level == "high"; }),
+                           cfg_.streams.end());
+
+        for (auto& s : cfg_.streams) {
+            if (s.level != "origin")
+                continue;
+            s.videoBitrate = "3000k";
+            s.videoMaxrate = "4500k";
+            s.portraitWidth = 1080;
+            s.portraitHeight = 1920;
+            s.landscapeWidth = 1920;
+            s.landscapeHeight = 1080;
+        }
+    }
+
     // Build active (non-audio-only) streams
     activeStreams_.clear();
     for (auto& s : cfg_.streams) {

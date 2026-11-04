@@ -32,6 +32,7 @@ public:
     static MultipusherDock* Instance();
 
 private slots:
+    void onInputChanged(int index);
     void onSiteNameChanged(int index);
     void onStreamNameChanged(int index);
     void onPubButtonClicked();
@@ -55,6 +56,7 @@ private:
     bool intervalsActiveNow() const;
     void updateIntervalControl();
 
+    QComboBox*    inputCombo_        = nullptr;
     QComboBox*    siteNameCombo_     = nullptr;
     QComboBox*    streamNameCombo_   = nullptr;
     QPushButton*  pubButton_         = nullptr;

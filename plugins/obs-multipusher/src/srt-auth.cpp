@@ -292,8 +292,26 @@ std::string NormalizeEnvKey(const std::string& value, const char* name) {
         return std::string();
     }
 
+    // .env files in the field have been seen in both forms: the raw key
+    // (TX_KEY_MAIN=32 chars, TX_KEY_BACK=20 chars) and the obfuscated form
+    // with four separator/decoy characters inserted (36/24 chars). Only
+    // strip the four characters when the value has the obfuscated length;
+    // otherwise an already-raw key would be corrupted and the SRT server
+    // would reject the resulting txSecret.
+    const bool isMain = std::strcmp(name, "TX_KEY_MAIN") == 0;
+    const size_t rawLength = isMain ? 32 : 20;
+    if (value.size() == rawLength)
+        return value;
+
+    if (value.size() != rawLength + 4) {
+        blog(LOG_WARNING,
+             "[obs-multipusher] %s in .env has unexpected length %zu; using it verbatim",
+             name, value.size());
+        return value;
+    }
+
     std::string out;
-    out.reserve(value.size() - 4);
+    out.reserve(rawLength);
     for (size_t i = 0; i < value.size(); ++i) {
         size_t pos = i + 1;
         if (pos == 1 || pos == 6 || pos == 7 || pos == 8)

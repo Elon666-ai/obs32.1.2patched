@@ -19,8 +19,11 @@ void OutputManager::Configure(const MultipusherConfig& cfg, const StreamLadder& 
     Stop(); // stop any running outputs first
 
     config_ = cfg;
+    const MultipusherConfig& effective = ladder.Config();
 
-    // Build output slots from active (non-audio-only) streams
+    // Build output slots from active streams in the *effective* ladder
+    // (StreamLadder may have dropped the high rung and/or capped origin to
+    // 1080p based on the actual source resolution).
     slots_.clear();
     auto statuses = ladder.GetStatuses();
 
@@ -30,7 +33,7 @@ void OutputManager::Configure(const MultipusherConfig& cfg, const StreamLadder& 
         // Find matching StreamConfig
         StreamConfig sc;
         bool found = false;
-        for (auto& s : cfg.streams) {
+        for (auto& s : effective.streams) {
             if (s.level == os.level) {
                 sc = s;
                 found = true;

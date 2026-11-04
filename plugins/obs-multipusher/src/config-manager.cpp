@@ -132,10 +132,15 @@ bool ConfigManager::Load(const std::string& path) {
         cfg_.input.audioDevice = obs_data_get_string(inp, "audioDevice");
         cfg_.input.videoFile   = obs_data_get_string(inp, "videoFile");
         cfg_.input.videoLayout = obs_data_get_string(inp, "videoLayout");
+        cfg_.input.inputResolution = obs_data_get_string(inp, "inputResolution");
         obs_data_release(inp);
     }
     if (cfg_.input.mode.empty())              cfg_.input.mode = "device";
     if (cfg_.input.videoLayout.empty())       cfg_.input.videoLayout = "portrait";
+    if (lower(cfg_.input.inputResolution) == "1080p")
+        cfg_.input.inputResolution = "1080P";
+    else
+        cfg_.input.inputResolution = "4K";
 
     // streams
     obs_data_array_t* streamsArr = obs_data_get_array(data, "streams");
@@ -164,6 +169,8 @@ bool ConfigManager::Load(const std::string& path) {
     }
     if (cfg_.streams.empty())
         cfg_.streams = DefaultStreams();
+
+    NormalizeStreams();
 
     // publish
     obs_data_t* pub = obs_data_get_obj(data, "publish");
@@ -229,6 +236,7 @@ bool ConfigManager::Save(const std::string& path) const {
     obs_data_set_string(inp, "audioDevice", cfg_.input.audioDevice.c_str());
     obs_data_set_string(inp, "videoFile", cfg_.input.videoFile.c_str());
     obs_data_set_string(inp, "videoLayout", cfg_.input.videoLayout.c_str());
+    obs_data_set_string(inp, "inputResolution", cfg_.input.inputResolution.c_str());
     obs_data_set_obj(data, "input", inp);
     obs_data_release(inp);
 
@@ -310,8 +318,13 @@ std::string ConfigManager::Validate() const {
     if (c.tencentSrt.tokenDays <= 0)
         return "tencentSrt.tokenDays must be positive";
 
-    if (c.streams.size() != 5)
-        return "streams must contain exactly five levels";
+    if (c.streams.size() < 3 || c.streams.size() > 4)
+        return "streams must contain three or four H.264 levels";
+
+    bool hasOrigin = false;
+    bool hasHigh = false;
+    bool hasStandard = false;
+    bool hasEconomic = false;
 
     for (auto& s : c.streams) {
         std::string resolvedName = SrtAuth::ResolveStreamName(c.siteName, s.streamName);
@@ -321,19 +334,29 @@ std::string ConfigManager::Validate() const {
         if (!isSafeSiteName(resolvedName))
             return "streams." + s.level + ".streamName resolves to invalid stream name: " + resolvedName;
 
+        if (s.audioOnly)
+            return "streams." + s.level + ": audio-only outputs are no longer supported";
+
+        if (s.level == "origin")
+            hasOrigin = true;
+        else if (s.level == "high")
+            hasHigh = true;
+        else if (s.level == "standard")
+            hasStandard = true;
+        else if (s.level == "economic")
+            hasEconomic = true;
+        else
+            return "streams." + s.level + ": unknown level (expected origin/high/standard/economic)";
+
         if (s.audioCodec != "aac")
             return "streams." + s.level + ".audioCodec must be aac";
 
         if (!bitrateValid(s.audioBitrate))
             return "streams." + s.level + ".audioBitrate is invalid: " + s.audioBitrate;
 
-        if (s.audioOnly)
-            continue;
-
         std::string vc = lower(s.videoCodec);
-        if (vc != "h264" && vc != "libx264" && vc != "h264_qsv" && vc != "h264_nvenc" &&
-            vc != "hevc" && vc != "h265" && vc != "libx265" && vc != "hevc_qsv" && vc != "hevc_nvenc")
-            return "streams." + s.level + ".videoCodec invalid: " + s.videoCodec;
+        if (vc != "h264" && vc != "libx264" && vc != "h264_qsv" && vc != "h264_nvenc")
+            return "streams." + s.level + ".videoCodec must be H.264 (HEVC is no longer pushed)";
 
         if (!bitrateValid(s.videoBitrate))
             return "streams." + s.level + ".videoBitrate is invalid: " + s.videoBitrate;
@@ -345,37 +368,143 @@ std::string ConfigManager::Validate() const {
             return "streams." + s.level + " dimensions must be positive even numbers";
     }
 
+    if (!hasOrigin || !hasStandard || !hasEconomic)
+        return "streams must include origin, standard and economic levels";
+    if (c.streams.size() == 4 && !hasHigh)
+        return "four-stream layout requires the high level";
+
     return ""; // OK
+}
+
+static StreamConfig MakeOriginStream() {
+    return {
+        "origin", "{siteName}", false,
+        "h264", "5000k", "7500k", 1440, 2560, 2560, 1440,
+        "aac", "128k"
+    };
+}
+
+static StreamConfig MakeHighStream() {
+    return {
+        "high", "{siteName}_high", false,
+        "h264", "3000k", "4500k", 1080, 1920, 1920, 1080,
+        "aac", "128k"
+    };
+}
+
+static StreamConfig MakeStandardStream() {
+    return {
+        "standard", "{siteName}_standard", false,
+        "h264", "1000k", "1500k", 720, 1280, 1280, 720,
+        "aac", "128k"
+    };
+}
+
+static StreamConfig MakeEconomicStream() {
+    return {
+        "economic", "{siteName}_economic", false,
+        "h264", "400k", "600k", 360, 640, 640, 360,
+        "aac", "128k"
+    };
 }
 
 std::vector<StreamConfig> ConfigManager::DefaultStreams() {
     return {
-        {
-            "bottom", "{siteName}_audio", true,
-            "", "", "", 0, 0, 0, 0,
-            "aac", "128k"
-        },
-        {
-            "economic", "{siteName}_economic", false,
-            "h264", "400k", "600k", 360, 640, 640, 360,
-            "aac", "128k"
-        },
-        {
-            "standard_hevc", "{siteName}_standard_hevc", false,
-            "hevc", "600k", "1000k", 720, 1280, 1280, 720,
-            "aac", "128k"
-        },
-        {
-            "standard", "{siteName}_standard", false,
-            "h264", "1000k", "1500k", 720, 1280, 1280, 720,
-            "aac", "128k"
-        },
-        {
-            "high", "{siteName}", false,
-            "h264", "2000k", "3000k", 1080, 1920, 1920, 1080,
-            "aac", "128k"
-        },
+        MakeOriginStream(),
+        MakeHighStream(),
+        MakeStandardStream(),
+        MakeEconomicStream(),
     };
+}
+
+void ConfigManager::NormalizeStreams() {
+    StreamConfig origin = MakeOriginStream();
+    StreamConfig high = MakeHighStream();
+    StreamConfig standard = MakeStandardStream();
+    StreamConfig economic = MakeEconomicStream();
+    bool haveOrigin = false;
+
+    for (auto& s : cfg_.streams) {
+        if (s.level == "origin") {
+            origin = s;
+            haveOrigin = true;
+        } else if (s.level == "high") {
+            // The old layout used level "high" for the main {siteName}
+            // stream. Treat that as the new origin stream (unless an
+            // explicit origin level already exists) and synthesize the new
+            // 1080p "_high" level.
+            std::string resolved = SrtAuth::ResolveStreamName(cfg_.siteName, s.streamName);
+            if (resolved == cfg_.siteName || s.streamName == "{siteName}") {
+                if (!haveOrigin) {
+                    origin = s;
+                    haveOrigin = true;
+                }
+            } else {
+                high = s;
+            }
+        } else if (s.level == "standard") {
+            standard = s;
+        } else if (s.level == "economic") {
+            economic = s;
+        }
+        // Legacy "bottom" (audio-only) and "standard_hevc" are dropped.
+    }
+
+    auto resetVideo = [](StreamConfig& sc, const char* level, const char* streamName, const char* bitrate,
+                         const char* maxrate, int pw, int ph, int lw, int lh) {
+        sc.level = level;
+        sc.streamName = streamName;
+        sc.audioOnly = false;
+        sc.videoCodec = "h264";
+        sc.videoBitrate = bitrate;
+        sc.videoMaxrate = maxrate;
+        sc.portraitWidth = pw;
+        sc.portraitHeight = ph;
+        sc.landscapeWidth = lw;
+        sc.landscapeHeight = lh;
+        sc.audioCodec = "aac";
+        if (sc.audioBitrate.empty())
+            sc.audioBitrate = "128k";
+    };
+
+    resetVideo(origin, "origin", "{siteName}", "5000k", "7500k", 1440, 2560, 2560, 1440);
+    resetVideo(high, "high", "{siteName}_high", "3000k", "4500k", 1080, 1920, 1920, 1080);
+
+    // Keep any existing standard/economic bitrates/dimensions when valid,
+    // only fill in defaults for missing values and force H.264.
+    standard.level = "standard";
+    standard.streamName = "{siteName}_standard";
+    standard.audioOnly = false;
+    standard.videoCodec = "h264";
+    if (standard.videoBitrate.empty()) standard.videoBitrate = "1000k";
+    if (standard.videoMaxrate.empty()) standard.videoMaxrate = "1500k";
+    if (standard.portraitWidth <= 0 || standard.portraitHeight <= 0 ||
+        standard.landscapeWidth <= 0 || standard.landscapeHeight <= 0) {
+        standard.portraitWidth = 720;
+        standard.portraitHeight = 1280;
+        standard.landscapeWidth = 1280;
+        standard.landscapeHeight = 720;
+    }
+    standard.audioCodec = "aac";
+    if (standard.audioBitrate.empty()) standard.audioBitrate = "128k";
+
+    economic.level = "economic";
+    economic.streamName = "{siteName}_economic";
+    economic.audioOnly = false;
+    economic.videoCodec = "h264";
+    if (economic.videoBitrate.empty()) economic.videoBitrate = "400k";
+    if (economic.videoMaxrate.empty()) economic.videoMaxrate = "600k";
+    if (economic.portraitWidth <= 0 || economic.portraitHeight <= 0 ||
+        economic.landscapeWidth <= 0 || economic.landscapeHeight <= 0) {
+        economic.portraitWidth = 360;
+        economic.portraitHeight = 640;
+        economic.landscapeWidth = 640;
+        economic.landscapeHeight = 360;
+    }
+    economic.audioCodec = "aac";
+    if (economic.audioBitrate.empty()) economic.audioBitrate = "128k";
+
+    cfg_.streams = {origin, high, standard, economic};
 }
 
 std::vector<StreamConfig> ConfigManager::ActiveStreams() const {

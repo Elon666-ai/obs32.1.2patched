@@ -48,12 +48,17 @@ std::string PlayerLink::BuildURL(const std::string& baseURL,
             addParam("view", viewName);
     }
 
-    // Add stream names by level
-    static const char* levels[] = {"bottom", "economic", "standard", "standard_hevc", "high"};
+    // Add stream names by level. The player's "high" parameter still means
+    // the top-quality stream, which is now the origin rung.
+    static const char* levels[] = {"origin", "high", "standard", "economic"};
     for (auto* level : levels) {
         auto it = streamNames.find(level);
         if (it != streamNames.end() && !it->second.empty()) {
-            std::string key = (std::string(level) == "standard_hevc") ? "standardHevc" : level;
+            std::string key = level;
+            if (key == "origin")
+                key = "high";
+            else if (key == "high")
+                key = "highHd";
             addParam(key, it->second);
         }
     }

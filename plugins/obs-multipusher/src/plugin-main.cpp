@@ -366,8 +366,8 @@ void MultipusherContext::SyncOBSServiceURL() {
         obs_data_release(curSettings);
     }
     if (curUrl.empty()) {
-        // No URL configured — use the ladder's high-level SRT URL as default
-        curUrl = ladder.GetSRTURL("high");
+        // No URL configured — use the ladder's origin SRT URL as default
+        curUrl = ladder.GetSRTURL("origin");
         if (curUrl.empty()) {
             MP_LOG(LOG_WARNING, "[obs-multipusher] OBS service sync: no URL to work with");
             return;
