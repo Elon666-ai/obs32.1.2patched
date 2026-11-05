@@ -576,11 +576,9 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 	HookWidget(ui->fpsInteger,           SCROLL_CHANGED, VIDEO_CHANGED);
 	HookWidget(ui->fpsNumerator,         SCROLL_CHANGED, VIDEO_CHANGED);
 	HookWidget(ui->fpsDenominator,       SCROLL_CHANGED, VIDEO_CHANGED);
-	HookWidget(ui->temporalDenoiseEnable, CHECK_CHANGED, VIDEO_CHANGED);
+	HookWidget(ui->globalEnhanceEnable,  CHECK_CHANGED,  VIDEO_CHANGED);
 	HookWidget(ui->detectRoiEnable,      CHECK_CHANGED,  VIDEO_CHANGED);
 	HookWidget(ui->qualityScoreEnable,   CHECK_CHANGED,  VIDEO_CHANGED);
-	HookWidget(ui->beautyFilterEnable,   CHECK_CHANGED,  VIDEO_CHANGED);
-	HookWidget(ui->clarityFilterEnable,  CHECK_CHANGED,  VIDEO_CHANGED);
 	HookWidget(ui->manualRoiGroupBox,    GROUP_CHANGED,  VIDEO_CHANGED);
 	HookWidget(ui->roiLeft,              SCROLL_CHANGED, VIDEO_CHANGED);
 	HookWidget(ui->roiTop,               SCROLL_CHANGED, VIDEO_CHANGED);
@@ -1810,11 +1808,9 @@ void OBSBasicSettings::LoadVideoSettings()
 	ApplyResolutionFpsCap();
 	LoadDownscaleFilters();
 
-	ui->temporalDenoiseEnable->setChecked(config_get_bool(main->Config(), "Video", "TemporalDenoise"));
+	ui->globalEnhanceEnable->setChecked(config_get_bool(main->Config(), "Stream1", "GlobalEnhance"));
 	ui->detectRoiEnable->setChecked(config_get_bool(main->Config(), "Video", "DetectRoi"));
 	ui->qualityScoreEnable->setChecked(config_get_bool(main->Config(), "Video", "QualityScore"));
-	ui->beautyFilterEnable->setChecked(config_get_bool(main->Config(), "Video", "BeautyFilter"));
-	ui->clarityFilterEnable->setChecked(config_get_bool(main->Config(), "Video", "ClarityFilter"));
 
 	// Manual ROI is independent of which service/protocol is selected on
 	// the Stream page (see WHIPOutput::ApplyRoi(), which is the only
@@ -3466,14 +3462,10 @@ void OBSBasicSettings::SaveVideoSettings()
 	}
 	SaveComboData(ui->downscaleFilter, "Video", "ScaleType");
 
-	SaveCheckBox(ui->temporalDenoiseEnable, "Video", "TemporalDenoise");
+	SaveCheckBox(ui->globalEnhanceEnable, "Stream1", "GlobalEnhance");
 	SaveCheckBox(ui->detectRoiEnable, "Video", "DetectRoi");
 	SaveCheckBox(ui->qualityScoreEnable, "Video", "QualityScore");
-	SaveCheckBox(ui->beautyFilterEnable, "Video", "BeautyFilter");
-	SaveCheckBox(ui->clarityFilterEnable, "Video", "ClarityFilter");
-	main->ApplyTemporalDenoiseSetting();
-	main->ApplyBeautyFilterSetting();
-	main->ApplyClarityFilterSetting();
+	main->ApplyGlobalEnhanceSetting();
 
 	// Manual ROI rectangle - see WHIPOutput::ApplyRoi(), which gives this
 	// precedence over the ball/person detector above whenever it's

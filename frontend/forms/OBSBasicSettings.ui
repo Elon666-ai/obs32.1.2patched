@@ -6987,9 +6987,9 @@
              <number>9</number>
             </property>
             <item row="0" column="1">
-             <widget class="QCheckBox" name="temporalDenoiseEnable">
+             <widget class="QCheckBox" name="globalEnhanceEnable">
               <property name="text">
-               <string>Basic.Settings.Stream.TemporalDenoise</string>
+               <string>Basic.Settings.Stream.GlobalEnhance</string>
               </property>
               <property name="checked">
                <bool>true</bool>
@@ -7010,26 +7010,6 @@
              <widget class="QCheckBox" name="qualityScoreEnable">
               <property name="text">
                <string>Basic.Settings.Stream.QualityScore</string>
-              </property>
-              <property name="checked">
-               <bool>true</bool>
-              </property>
-             </widget>
-            </item>
-            <item row="3" column="1">
-             <widget class="QCheckBox" name="beautyFilterEnable">
-              <property name="text">
-               <string>Basic.Settings.Stream.BeautyFilter</string>
-              </property>
-              <property name="checked">
-               <bool>false</bool>
-              </property>
-             </widget>
-            </item>
-            <item row="4" column="1">
-             <widget class="QCheckBox" name="clarityFilterEnable">
-              <property name="text">
-               <string>Basic.Settings.Stream.ClarityFilter</string>
               </property>
               <property name="checked">
                <bool>true</bool>

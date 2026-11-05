@@ -66,6 +66,7 @@
 #endif
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -701,11 +702,8 @@ bool OBSBasic::InitBasicConfigDefaults()
 			changed = true;
 		}
 	};
-	MigrateStreamToVideoBool("TemporalDenoise");
 	MigrateStreamToVideoBool("DetectRoi");
 	MigrateStreamToVideoBool("QualityScore");
-	MigrateStreamToVideoBool("BeautyFilter");
-	MigrateStreamToVideoBool("ClarityFilter");
 
 	/* ----------------------------------------------------- */
 	/* enforce minimum retry delay of 1 second prior to 27.1 */
@@ -771,9 +769,7 @@ bool OBSBasic::InitBasicConfigDefaults()
 	config_set_default_string(activeConfiguration, "Output", "Mode", "Simple");
 
 	config_set_default_bool(activeConfiguration, "Stream1", "IgnoreRecommended", false);
-	config_set_default_bool(activeConfiguration, "Video", "TemporalDenoise", true);
-	config_set_default_bool(activeConfiguration, "Video", "BeautyFilter", false);
-	config_set_default_bool(activeConfiguration, "Video", "ClarityFilter", true);
+	config_set_default_bool(activeConfiguration, "Stream1", "GlobalEnhance", true);
 	config_set_default_bool(activeConfiguration, "Video", "DetectRoi", false);
 	config_set_default_bool(activeConfiguration, "Video", "QualityScore", true);
 	// Default +6 QP inside / -8 QP outside the manual ROI rectangle (see
@@ -1479,9 +1475,10 @@ void OBSBasic::OnFirstLoad()
 
 	Auth::Load();
 
-	ApplyTemporalDenoiseSetting();
-	ApplyBeautyFilterSetting();
-	ApplyClarityFilterSetting();
+	ApplyGlobalEnhanceSetting();
+
+	sceneCollectionLoaded = true;
+
 	UpdateRoiSelectButton();
 
 	bool showLogViewerOnStartup = config_get_bool(App()->GetUserConfig(), "LogViewer", "ShowLogStartup");
@@ -1490,113 +1487,107 @@ void OBSBasic::OnFirstLoad()
 		on_actionViewCurrentLog_triggered();
 }
 
-static const char *TEMPORAL_DENOISE_FILTER_ID = "temporal_denoise_filter";
-static const char *TEMPORAL_DENOISE_AUTO_NAME = "Temporal Denoise (Auto)";
+static const char *GLOBAL_ENHANCE_FILTER_ID = "global_enhance_filter";
+static const char *GLOBAL_ENHANCE_AUTO_NAME = "整体画质增强 (Auto)";
+static const char *GLOBAL_ENHANCE_LEGACY_AUTO_NAMES[] = {
+	"PPCDN Global Enhance (Auto)",
+	"全局画面增强 (Auto)",
+};
+static const char *LEGACY_AUTO_FILTER_NAMES[] = {
+	"Temporal Denoise (Auto)",
+	"Face Beauty (Auto)",
+	"Clarity (Auto)",
+};
 
-void OBSBasic::ApplyTemporalDenoiseSetting()
+struct GlobalEnhanceFilterState {
+	bool found = false;
+	std::vector<OBSSource> duplicates;
+};
+
+static void EnumGlobalEnhanceFilters(obs_source_t *, obs_source_t *filter, void *param)
 {
-	bool enabled = config_get_bool(activeConfiguration, "Video", "TemporalDenoise");
-
-	auto cb = [](void *param, obs_source_t *source) -> bool {
-		const bool enable = *static_cast<bool *>(param);
-
-		if (strcmp(obs_source_get_id(source), "dshow_input") != 0)
-			return true;
-
-		// The auto-managed instance is identified by its fixed name;
-		// manually added copies of the filter are left alone.
-		OBSSourceAutoRelease existing = obs_source_get_filter_by_name(source, TEMPORAL_DENOISE_AUTO_NAME);
-
-		if (enable && !existing) {
-			OBSSourceAutoRelease filter = obs_source_create_private(TEMPORAL_DENOISE_FILTER_ID,
-										TEMPORAL_DENOISE_AUTO_NAME, nullptr);
-			if (filter) {
-				obs_source_filter_add(source, filter);
-				blog(LOG_INFO, "Temporal denoise: attached to '%s'", obs_source_get_name(source));
-			}
-		} else if (!enable && existing) {
-			obs_source_filter_remove(source, existing);
-			blog(LOG_INFO, "Temporal denoise: removed from '%s'", obs_source_get_name(source));
-		}
-
-		return true;
-	};
-
-	obs_enum_sources(cb, &enabled);
+	auto *state = static_cast<GlobalEnhanceFilterState *>(param);
+	if (strcmp(obs_source_get_name(filter), GLOBAL_ENHANCE_AUTO_NAME) == 0) {
+		if (!state->found)
+			state->found = true;
+		else
+			state->duplicates.emplace_back(filter);
+	}
 }
 
-static const char *BEAUTY_FILTER_ID = "beauty_filter";
-static const char *BEAUTY_FILTER_AUTO_NAME = "Face Beauty (Auto)";
-
-void OBSBasic::ApplyBeautyFilterSetting()
+void OBSBasic::ApplyGlobalEnhanceSetting()
 {
-	bool enabled = config_get_bool(activeConfiguration, "Video", "BeautyFilter");
+	bool enabled = config_get_bool(activeConfiguration, "Stream1", "GlobalEnhance");
 
-	auto cb = [](void *param, obs_source_t *source) -> bool {
+	// Scene sources render the complete composited picture, so one filter
+	// here covers cameras, images, browser sources, text, recordings and all
+	// stream/record/simulcast outputs without processing any item twice.
+	auto scene_cb = [](void *param, obs_source_t *scene) -> bool {
 		const bool enable = *static_cast<bool *>(param);
+		GlobalEnhanceFilterState state;
+		obs_source_enum_filters(scene, EnumGlobalEnhanceFilters, &state);
 
-		// Live camera capture only - media-file/network playback (e.g.
-		// a pre-recorded video used as the broadcast) must never get
-		// the "live face" beauty treatment.
-		const bool isCamera = strcmp(obs_source_get_id(source), "dshow_input") == 0;
+		// Rename older auto-filter names in place so the user's tuned
+		// strengths survive the visible-name change. If the new name
+		// already exists, drop the legacy copy.
+		for (const char *legacyName : GLOBAL_ENHANCE_LEGACY_AUTO_NAMES) {
+			OBSSourceAutoRelease legacy = obs_source_get_filter_by_name(scene, legacyName);
+			if (!legacy)
+				continue;
 
-		// The auto-managed instance is identified by its fixed name;
-		// manually added copies of the filter are left alone.
-		OBSSourceAutoRelease existing = obs_source_get_filter_by_name(source, BEAUTY_FILTER_AUTO_NAME);
-
-		if (enable && isCamera && !existing) {
-			OBSSourceAutoRelease filter =
-				obs_source_create_private(BEAUTY_FILTER_ID, BEAUTY_FILTER_AUTO_NAME, nullptr);
-			if (filter) {
-				obs_source_filter_add(source, filter);
-				blog(LOG_INFO, "Face beauty: attached to '%s'", obs_source_get_name(source));
+			if (enable && !state.found) {
+				obs_source_set_name(legacy, GLOBAL_ENHANCE_AUTO_NAME);
+				state.found = true;
+				blog(LOG_INFO, "Global enhance: renamed on scene '%s'", obs_source_get_name(scene));
+			} else {
+				obs_source_filter_remove(scene, legacy);
+				blog(LOG_INFO, "Global enhance: removed legacy name from scene '%s'",
+				     obs_source_get_name(scene));
 			}
-		} else if ((!enable || !isCamera) && existing) {
-			// Also strips any instance left over on a non-camera
-			// source from before this restriction existed.
-			obs_source_filter_remove(source, existing);
-			blog(LOG_INFO, "Face beauty: removed from '%s'", obs_source_get_name(source));
+		}
+
+		// Older builds could attach a second auto filter while a scene
+		// collection was still loading. Keep one and remove the extras.
+		for (auto &duplicate : state.duplicates) {
+			obs_source_filter_remove(scene, duplicate);
+			blog(LOG_INFO, "Global enhance: removed duplicate from scene '%s'",
+			     obs_source_get_name(scene));
+		}
+
+		if (enable && !state.found) {
+			OBSSourceAutoRelease filter =
+				obs_source_create_private(GLOBAL_ENHANCE_FILTER_ID, GLOBAL_ENHANCE_AUTO_NAME, nullptr);
+			if (filter) {
+				obs_source_filter_add(scene, filter);
+				blog(LOG_INFO, "Global enhance: attached to scene '%s'", obs_source_get_name(scene));
+			}
+		} else if (!enable && state.found) {
+			OBSSourceAutoRelease existing = obs_source_get_filter_by_name(scene, GLOBAL_ENHANCE_AUTO_NAME);
+			if (existing) {
+				obs_source_filter_remove(scene, existing);
+				blog(LOG_INFO, "Global enhance: removed from scene '%s'", obs_source_get_name(scene));
+			}
 		}
 
 		return true;
 	};
+	obs_enum_scenes(scene_cb, &enabled);
 
-	obs_enum_sources(cb, &enabled);
-}
-
-static const char *CLARITY_FILTER_ID = "clarity_filter";
-static const char *CLARITY_FILTER_AUTO_NAME = "Clarity (Auto)";
-
-void OBSBasic::ApplyClarityFilterSetting()
-{
-	bool enabled = config_get_bool(activeConfiguration, "Video", "ClarityFilter");
-
-	auto cb = [](void *param, obs_source_t *source) -> bool {
-		const bool enable = *static_cast<bool *>(param);
-
-		if (strcmp(obs_source_get_id(source), "dshow_input") != 0)
-			return true;
-
-		// The auto-managed instance is identified by its fixed name;
-		// manually added copies of the filter are left alone.
-		OBSSourceAutoRelease existing = obs_source_get_filter_by_name(source, CLARITY_FILTER_AUTO_NAME);
-
-		if (enable && !existing) {
-			OBSSourceAutoRelease filter =
-				obs_source_create_private(CLARITY_FILTER_ID, CLARITY_FILTER_AUTO_NAME, nullptr);
-			if (filter) {
-				obs_source_filter_add(source, filter);
-				blog(LOG_INFO, "Clarity: attached to '%s'", obs_source_get_name(source));
+	// Profiles created by earlier builds may still contain the three
+	// camera-only auto filters. Remove only their fixed auto-managed names;
+	// manually added filters remain untouched.
+	auto cleanup_cb = [](void *, obs_source_t *source) -> bool {
+		for (const char *name : LEGACY_AUTO_FILTER_NAMES) {
+			OBSSourceAutoRelease existing = obs_source_get_filter_by_name(source, name);
+			if (existing) {
+				obs_source_filter_remove(source, existing);
+				blog(LOG_INFO, "Global enhance: removed legacy '%s' from '%s'", name,
+				     obs_source_get_name(source));
 			}
-		} else if (!enable && existing) {
-			obs_source_filter_remove(source, existing);
-			blog(LOG_INFO, "Clarity: removed from '%s'", obs_source_get_name(source));
 		}
-
 		return true;
 	};
-
-	obs_enum_sources(cb, &enabled);
+	obs_enum_sources(cleanup_cb, nullptr);
 }
 
 OBSBasic::~OBSBasic()
@@ -2379,6 +2370,25 @@ void OBSBasic::SetDisplayAffinity(QWindow *window)
 
 void OBSBasic::OnEvent(enum obs_frontend_event event)
 {
+	switch (event) {
+	case OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGING:
+		sceneCollectionLoaded = false;
+		break;
+	case OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGED:
+		sceneCollectionLoaded = true;
+		ApplyGlobalEnhanceSetting();
+		break;
+	case OBS_FRONTEND_EVENT_SCENE_LIST_CHANGED:
+		// Ignore the burst of list events while a scene collection is
+		// still loading; attaching before its saved filters load would
+		// create a second auto filter alongside the restored one.
+		if (sceneCollectionLoaded)
+			ApplyGlobalEnhanceSetting();
+		break;
+	default:
+		break;
+	}
+
 	if (api)
 		api->on_event(event);
 }

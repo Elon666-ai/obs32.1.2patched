@@ -53,11 +53,9 @@ void OBSBasic::StartStreaming()
 		return;
 
 	// Re-enforce here as well as on startup/settings-save, so scene
-	// collections or cameras added since then are covered before the
+	// collections or scenes added since then are covered before the
 	// encoders see any frames.
-	ApplyTemporalDenoiseSetting();
-	ApplyBeautyFilterSetting();
-	ApplyClarityFilterSetting();
+	ApplyGlobalEnhanceSetting();
 
 	if (auth && auth->broadcastFlow()) {
 		if (!broadcastActive && !broadcastReady) {

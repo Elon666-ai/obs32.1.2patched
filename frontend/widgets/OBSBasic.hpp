@@ -1103,6 +1103,7 @@ private:
 	long disableSaving = 1;
 	bool projectChanged = false;
 	bool clearingFailed = false;
+	bool sceneCollectionLoaded = false;
 
 	QPointer<OBSMissingFiles> missDialog;
 
@@ -1440,25 +1441,14 @@ signals:
 	 * -------------------------------------
 	 */
 public:
-	// Enforces the Settings > Video > Advanced Options "Temporal
-	// Denoise" checkbox ("Video"/"TemporalDenoise"): attaches the
-	// temporal_denoise_filter to every camera (dshow_input) source when
-	// enabled, removes the auto-added instance when disabled. Runs on
-	// startup, on video-settings save, and at stream start.
-	void ApplyTemporalDenoiseSetting();
-
-	// Same enforcement pattern for the "Face Beauty" checkbox
-	// ("Video"/"BeautyFilter"): attaches beauty_filter to every
-	// camera (dshow_input) source only - media-file/network playback
-	// sources are excluded and never receive the filter. The filter
-	// itself only acts on frames where it detects a face, so attaching
-	// it blanket-style to cameras is a no-op for faceless content.
-	void ApplyBeautyFilterSetting();
-
-	// Same enforcement pattern for the "Clarity" checkbox
-	// ("Video"/"ClarityFilter"): attaches clarity_filter (GPU local
-	// contrast enhancement) to every camera (dshow_input) source.
-	void ApplyClarityFilterSetting();
+	// Enforces the Settings > Video > Advanced Options "Whole Picture
+	// Enhancement" checkbox ("Stream1"/"GlobalEnhance"): attaches the
+	// global_enhance_filter to every scene source when enabled, removes
+	// the auto-added instance when disabled, and cleans up the legacy
+	// per-camera auto filters from profiles created by older builds.
+	// Runs on startup, on scene collection/list changes, on settings
+	// save, and at stream start.
+	void ApplyGlobalEnhanceSetting();
 
 	// Shows/enables ui->previewRoiSelectButton while no stream is active.
 	// Manual ROI (Settings > Video > Advanced Options) is independent of
