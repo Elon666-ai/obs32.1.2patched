@@ -1,0 +1,143 @@
+/*
+ * PPCDN global picture enhancement.
+ *
+ * The pass is deliberately conservative: temporal blending is disabled on
+ * motion, beauty is skin-selective and edge-aware, clarity is mid-tone
+ * weighted, and vibrance protects already-saturated colors and skin.
+ */
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform texture2d previous_image;
+
+uniform float history_valid;
+uniform float temporal_strength;
+uniform float beauty_strength;
+uniform float clarity_strength;
+uniform float vividness_strength;
+uniform float texture_width;
+uniform float texture_height;
+
+sampler_state linear_sampler {
+	Filter = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertInOut {
+	float4 pos : POSITION;
+	float2 uv : TEXCOORD0;
+};
+
+VertInOut VSDefault(VertInOut input)
+{
+	VertInOut output;
+	output.pos = mul(float4(input.pos.xyz, 1.0), ViewProj);
+	output.uv = input.uv;
+	return output;
+}
+
+float luma(float3 rgb)
+{
+	return dot(rgb, float3(0.2126, 0.7152, 0.0722));
+}
+
+float skin_weight(float3 rgb)
+{
+	float y = luma(rgb);
+	float cb = 0.5 + dot(rgb, float3(-0.168736, -0.331264, 0.5));
+	float cr = 0.5 + dot(rgb, float3(0.5, -0.418688, -0.081312));
+
+	float cb_mask = smoothstep(0.27, 0.33, cb) * (1.0 - smoothstep(0.50, 0.56, cb));
+	float cr_mask = smoothstep(0.50, 0.55, cr) * (1.0 - smoothstep(0.70, 0.76, cr));
+	float y_mask = smoothstep(0.10, 0.22, y) * (1.0 - smoothstep(0.92, 1.0, y));
+	return saturate(cb_mask * cr_mask * y_mask);
+}
+
+float3 local_blur(float2 uv, float2 pixel)
+{
+	float3 sum = image.Sample(linear_sampler, uv).rgb * 2.0;
+	sum += image.Sample(linear_sampler, uv + float2( 1.5,  0.0) * pixel).rgb;
+	sum += image.Sample(linear_sampler, uv + float2(-1.5,  0.0) * pixel).rgb;
+	sum += image.Sample(linear_sampler, uv + float2( 0.0,  1.5) * pixel).rgb;
+	sum += image.Sample(linear_sampler, uv + float2( 0.0, -1.5) * pixel).rgb;
+	sum += image.Sample(linear_sampler, uv + float2( 1.1,  1.1) * pixel).rgb;
+	sum += image.Sample(linear_sampler, uv + float2(-1.1,  1.1) * pixel).rgb;
+	sum += image.Sample(linear_sampler, uv + float2( 1.1, -1.1) * pixel).rgb;
+	sum += image.Sample(linear_sampler, uv + float2(-1.1, -1.1) * pixel).rgb;
+	return sum / 10.0;
+}
+
+float clarity_base(float2 uv, float2 pixel)
+{
+	float radius = max(texture_height * (7.0 / 1080.0), 3.0);
+	float2 r1 = pixel * radius;
+	float2 r2 = pixel * radius * 0.5;
+
+	float base = luma(image.Sample(linear_sampler, uv).rgb);
+	base += luma(image.Sample(linear_sampler, uv + float2( 1.000,  0.000) * r1).rgb);
+	base += luma(image.Sample(linear_sampler, uv + float2( 0.500,  0.866) * r1).rgb);
+	base += luma(image.Sample(linear_sampler, uv + float2(-0.500,  0.866) * r1).rgb);
+	base += luma(image.Sample(linear_sampler, uv + float2(-1.000,  0.000) * r1).rgb);
+	base += luma(image.Sample(linear_sampler, uv + float2(-0.500, -0.866) * r1).rgb);
+	base += luma(image.Sample(linear_sampler, uv + float2( 0.500, -0.866) * r1).rgb);
+	base += luma(image.Sample(linear_sampler, uv + float2( 0.866,  0.500) * r2).rgb);
+	base += luma(image.Sample(linear_sampler, uv + float2( 0.000,  1.000) * r2).rgb);
+	base += luma(image.Sample(linear_sampler, uv + float2(-0.866,  0.500) * r2).rgb);
+	base += luma(image.Sample(linear_sampler, uv + float2(-0.866, -0.500) * r2).rgb);
+	base += luma(image.Sample(linear_sampler, uv + float2( 0.000, -1.000) * r2).rgb);
+	base += luma(image.Sample(linear_sampler, uv + float2( 0.866, -0.500) * r2).rgb);
+	return base / 13.0;
+}
+
+float4 PSGEnhance(VertInOut input) : TARGET
+{
+	float4 original = image.Sample(linear_sampler, input.uv);
+	float3 color = original.rgb;
+	float2 pixel = float2(1.0 / texture_width, 1.0 / texture_height);
+
+	/* Motion-adaptive temporal denoise. */
+	float3 previous = previous_image.Sample(linear_sampler, input.uv).rgb;
+	float3 delta3 = abs(color - previous);
+	float delta = max(delta3.r, max(delta3.g, delta3.b));
+	float still = 1.0 - smoothstep(0.018, 0.12, delta);
+	float temporal_mix = temporal_strength * 0.58 * still * history_valid;
+	color = lerp(color, previous, temporal_mix);
+
+	/* Basic face beauty: skin smoothing plus a small rosy lift. */
+	float skin = skin_weight(color);
+	float3 blurred = local_blur(input.uv, pixel);
+	float edge = abs(luma(color) - luma(blurred));
+	float edge_protect = 1.0 - smoothstep(0.025, 0.11, edge);
+	float beauty_mix = beauty_strength * 0.62 * skin * edge_protect;
+	color = lerp(color, blurred, beauty_mix);
+	color += float3(0.030, -0.004, -0.010) * beauty_strength * skin;
+
+	/* Mid-tone local contrast (clarity), hue-preserving through luma scale. */
+	float y = luma(color);
+	float detail = y - clarity_base(input.uv, pixel);
+	float mid = saturate(1.0 - 4.0 * (y - 0.5) * (y - 0.5));
+	float boost = clamp(detail * clarity_strength * 1.45 * mid, -0.14, 0.14);
+	float clarity_scale = (y > 0.0001) ? (y + boost) / y : 1.0;
+	color *= clarity_scale;
+
+	/* Vibrance raises muted colors more than saturated ones and protects skin. */
+	float maximum = max(color.r, max(color.g, color.b));
+	float minimum = min(color.r, min(color.g, color.b));
+	float saturation = maximum - minimum;
+	float vibrance = vividness_strength * (1.0 - saturation) * (1.0 - 0.35 * skin);
+	float vivid_luma = luma(color);
+	color = lerp(float3(vivid_luma, vivid_luma, vivid_luma), color, 1.0 + 0.72 * vibrance);
+	color += (color - 0.5) * (0.06 * vividness_strength * mid);
+
+	return float4(saturate(color), original.a);
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSDefault(input);
+		pixel_shader = PSGEnhance(input);
+	}
+}

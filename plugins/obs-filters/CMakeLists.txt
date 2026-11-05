@@ -22,6 +22,7 @@ target_sources(
     expander-filter.c
     gain-filter.c
     gpu-delay.c
+    global-enhance-filter.c
     hdr-tonemap-filter.c
     invert-audio-polarity.c
     limiter-filter.c
